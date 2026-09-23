@@ -10,11 +10,18 @@
 
 ## 🚀 快速开始（Windows 11）
 
+```bash
+git clone https://github.com/gcj888888/codex-keyboard-win.git
+cd codex-keyboard-win
+```
+> 默认分支 `main`。**仓库源码已含全部适配补丁，clone 下来直接编译即可**
+> （`patches/` 只是留作与上游对比的差异记录）。
+
 三步（完整步骤见 **[docs/Windows复现指南.md](docs/Windows复现指南.md)**）：
 
 ```bash
 # 在 WSL2 (Ubuntu) 里执行
-bash scripts/wsl/apply-patches.sh     # 1) 打补丁 + 编译 Host
+bash scripts/wsl/apply-patches.sh     # 1) 编译 Host（补丁已内置，会自动跳过）
 bash scripts/wsl/install-service.sh   # 2) 装 systemd 服务（含僵尸清理定时器）
 bash scripts/wsl/bind-slots.sh        # 3) 绑定四个槽位
 ```
@@ -66,11 +73,11 @@ ASR/TTS 交给 Qwen，任务执行交给本地 Codex CLI。
 |---|---|
 | `patches/` | **我们对上游的全部改动**（Linux 适配 + 缺陷修复 + 固件修复）|
 | `scripts/windows/` | Windows 侧脚本（环境自检、WSL 保活）|
-| `scripts/wsl/` | WSL 侧脚本（打补丁、装服务、绑槽位、烧固件、诊断）|
-| `systemd/` | systemd 服务模板（`install-service.sh` 会渲染安装）|
+| `scripts/wsl/` | WSL 侧脚本（编译 Host、装服务、绑槽位、烧固件、诊断）|
 | `tools/` | 诊断工具（**无板子模拟器**、僵尸总结清理）|
 | `app/host/` | Rust Host（已含补丁）|
 | `firmware/` | ESP32-S3 固件（已含补丁）|
+| `.github/workflows/` | CI：C++ 宿主测试 + Host 编译 + 固件编译 |
 | `docs/00–05 系列` | **Windows 复现五篇**：[指南](docs/Windows复现指南.md) / [板子](docs/01-板子固件篇.md) / [Host](docs/02-Host配置篇.md) / [云端](docs/03-云端配置篇.md) / [总结与踩坑](docs/04-总结与踩坑.md) / [操作手册](docs/05-操作手册.md) |
 | `docs/总体方案.md` 等 | 作者原文（产品边界、架构、协议）|
 | `flow/` | 进展日志、踩坑记录、决策、计划 |

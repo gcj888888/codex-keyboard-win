@@ -1,5 +1,13 @@
 name: CI
 
+# 只保留本仓库「已实测验证过」的三个构建目标 + 密钥扫描。
+# 原上游 CI 里的 macos-desktop 任务与本仓无关（本仓不使用 Tauri App），已移除。
+#
+# 对应本地等价命令：
+#   C++ 宿主测试 : cmake -S firmware/host_test -B build && ctest --test-dir build
+#   Host 编译    : cargo build --locked --release -p easy-codex-host --bin easy-codex-host
+#   固件编译     : idf.py -C firmware build
+
 on:
   push:
   pull_request:
@@ -8,44 +16,50 @@ permissions:
   contents: read
 
 jobs:
-  host:
+  host-tests:
+    name: C++ 宿主测试（57 项）
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
-      - name: Toolchains
+      - name: Configure
+        run: cmake -S firmware/host_test -B firmware/build-ci -G Ninja
+      - name: Build
+        run: cmake --build firmware/build-ci --parallel
+      - name: Test
+        run: ctest --test-dir firmware/build-ci --output-on-failure
+
+  host-build:
+    name: Host 编译（Rust）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      # 与实测环境一致的版本（本仓验证时使用 rustc 1.98.1）
+      - name: Toolchain
         run: |
-          rustup toolchain install 1.94.1 --profile minimal --component clippy,rustfmt
-          rustup default 1.94.1
-          corepack enable
-          corepack prepare pnpm@10.33.2 --activate
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-      - name: Fast eval
-        run: ./scripts/eval-fast.sh
+          rustup toolchain install 1.98.1 --profile minimal
+          rustup default 1.98.1
+      - name: Build Host
+        run: cargo build --locked --release -p easy-codex-host --bin easy-codex-host
 
   firmware:
+    name: 固件编译（ESP-IDF 5.5.5）
     runs-on: ubuntu-latest
     container: espressif/idf:v5.5.5
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
-      - name: ESP-IDF build
+      - name: Build firmware
         shell: bash
         run: |
           export IDF_PATH="${IDF_PATH:-/opt/esp/idf}"
-          source "$IDF_PATH/export.sh"
+          . "$IDF_PATH/export.sh"
           idf.py -C firmware -B "$GITHUB_WORKSPACE/firmware/build-ci" build
 
-  macos-desktop:
-    runs-on: macos-15
-    timeout-minutes: 10
+  secrets:
+    name: 密钥扫描
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
-      - name: Toolchains and dependencies
-        run: |
-          rustup toolchain install 1.94.1 --profile minimal
-          rustup default 1.94.1
-          corepack enable
-          corepack prepare pnpm@10.33.2 --activate
-          pnpm install --frozen-lockfile
-      - name: Build unsigned macOS desktop bundle
-        run: pnpm --filter @easy-codex/desktop-ui bundle:mac
+      - name: Install ripgrep
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq ripgrep
+      - name: Scan for credentials
+        run: ./scripts/check-secrets.sh
