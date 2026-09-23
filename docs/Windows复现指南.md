@@ -134,17 +134,50 @@ powershell -ExecutionPolicy Bypass -File scripts\windows\setup-wsl.ps1
 
 它会检查 WSL / CPU / 内存 / 磁盘 / 板子 USB / usbipd / `.wslconfig`，并给出下一步。
 
-### 防止 WSL 被空闲回收（重要）
+### ⚠️ 必做：`.wslconfig` 两个设置（缺一个就跑不通）
 
-WSL2 发行版空闲后会被回收，**Host 会跟着一起消失**。在 `%USERPROFILE%\.wslconfig` 写：
+编辑 `%USERPROFILE%\.wslconfig`（Windows 用户目录下）：
 
 ```ini
 [wsl2]
+# ① 镜像网络：让板子能找到 Host —— 必须有！
+networkingMode=mirrored
+# ② 防空闲回收：WSL 空闲约 1 分钟会被整体关掉，Host 跟着消失
 instanceIdleTimeout=-1
 ```
 
+改完执行 `wsl --shutdown` 生效。
+
+**① 为什么必须开镜像网络（这条最容易漏，也最致命）**
+
+WSL2 **默认是 NAT 模式**：发行版拿的是一个虚拟内网地址（`172.x.x.x`），
+**局域网里的板子根本路由不到它** —— 现象就是「板子灯不亮、按 S5 没声音」，
+而且看日志什么错都没有（UDP 就这样，发不到就静默丢弃）。
+
+开了 `networkingMode=mirrored` 后，WSL **复用 Windows 自己的局域网 IP**，
+于是：
+
+```
+板子 (192.168.1.77) ──UDP:17333──> 192.168.1.16（Windows 的 IP，同时也是 WSL 的 IP）✅
+```
+
+所以给板子配的 Host 地址，就是**你这台 Windows 电脑在局域网里的 IP**。
+用 `ipconfig` 查（看无线网卡那一项）。
+
+> 需要 Windows 11 22H2+（build 22621+）。老版本没有 mirrored 模式，
+> 只能走端口转发（`netsh interface portproxy`）或让板子配 WSL 的 IP —— 都不如镜像模式稳。
+
+**② 防 WSL 空闲回收**
+
+WSL2 在没有任何活动会话时会**把整个发行版关掉**（实测约 1 分钟），
+里面的 `easy-codex-host` 一起消失。`instanceIdleTimeout=-1` 表示永不因空闲关闭。
+
 > 实测这个设置**并不总能生效**，所以仓库还提供 `scripts/windows/keepalive.vbs`
 > —— 每 5 分钟戳一下 WSL 保活。把它放进启动目录（`Win+R` → `shell:startup`）即可。
+> 该文件刻意保持 **纯 ASCII**（Windows Script Host 对 UTF-8 中文注释支持不可靠）。
+
+**一键自检/写入**：`setup-wsl.ps1` 会检查这两项，缺失时明确报警；
+加 `-WriteWslConfig` 可自动写入（会先备份原文件为 `.wslconfig.bak`）。
 
 ## 3. 落地步骤
 

@@ -54,23 +54,55 @@ if (Test-Path $usbipd) {
 }
 
 Line ""
-Line "════════ 4. .wslconfig（防止发行版被空闲回收）════════"
+Line "════════ 4. .wslconfig（镜像网络 + 防空闲回收）════════"
 $cfgPath = "$env:USERPROFILE\.wslconfig"
+$cfgText = ""
 if (Test-Path $cfgPath) {
   Line "   已存在 $cfgPath :"
   # 必须显式指定 UTF8：PS 5.1 默认按 ANSI 读，会让中文注释变乱码
-  (Get-Content $cfgPath -Encoding UTF8) | ForEach-Object { Line "     $_" }
+  $cfgText = (Get-Content $cfgPath -Encoding UTF8) -join "`n"
+  $cfgText -split "`n" | ForEach-Object { Line "     $_" }
 } else {
-  Line "   不存在。建议创建（否则 WSL 空闲会被回收，Host 一起断）："
-  Line "   [wsl2]"
-  Line "   instanceIdleTimeout=-1"
-  Line ""
-  if ($WriteWslConfig) {
-    "[wsl2]`ninstanceIdleTimeout=-1" | Out-File -FilePath $cfgPath -Encoding ascii
-    Line "   ✅ 已写入 $cfgPath（重启 WSL 生效：wsl --shutdown）"
-  } else {
-    Line "   （本次未写入。要写就重跑并加 -WriteWslConfig）"
+  Line "   不存在 $cfgPath"
+}
+
+Line ""
+Line "   —— 关键项自检 ——"
+# ★ 镜像网络：决定「板子能不能找到 Host」
+if ($cfgText -match "(?m)^\s*networkingMode\s*=\s*mirrored") {
+  Line "   ✅ networkingMode=mirrored（镜像网络已启用）"
+} else {
+  Line "   ❌ 未启用 networkingMode=mirrored —— ★ 这是板子连不上 Host 的最常见原因"
+  Line "      默认 NAT 模式下 WSL 是 172.x 内网地址，局域网里的板子**根本到不了**；"
+  Line "      镜像模式下 WSL 复用 Windows 的局域网 IP，板子连 <Windows的IP>:17333 即可。"
+}
+# 防空闲回收
+if ($cfgText -match "(?m)^\s*instanceIdleTimeout\s*=\s*-1") {
+  Line "   ✅ instanceIdleTimeout=-1（不会被空闲回收）"
+} else {
+  Line "   ⚠️  未设置 instanceIdleTimeout=-1 —— WSL 空闲约 1 分钟会被整体回收，"
+  Line "      Host 跟着消失（现象：按 S1/S5 全都没反应）"
+}
+
+if ($WriteWslConfig) {
+  $newCfg = @"
+[wsl2]
+# WSL 复用 Windows 的局域网 IP，板子才能连到 WSL 里的 Host（必须有）
+networkingMode=mirrored
+# -1 = 永不因空闲而关闭 WSL（Host 才不会被连坐带走）
+instanceIdleTimeout=-1
+"@
+  # 备份已有配置再覆盖
+  if ((Test-Path $cfgPath) -and $cfgText.Trim()) {
+    Copy-Item $cfgPath "$cfgPath.bak" -Force
+    Line "   （原配置已备份到 $cfgPath.bak）"
   }
+  [System.IO.File]::WriteAllText($cfgPath, $newCfg, (New-Object System.Text.UTF8Encoding($false)))
+  Line "   ✅ 已写入 $cfgPath（重启 WSL 生效：wsl --shutdown）"
+} else {
+  Line ""
+  Line "   （本次未改动。要自动写入这两项就重跑并加 -WriteWslConfig；"
+  Line "     手动写也可以，内容见上。改完执行 wsl --shutdown 生效）"
 }
 
 Line ""
