@@ -43,6 +43,7 @@ Windows 原生程序进不了 WSL 的内部通道，**移植代价极大**。
 | Codex CLI | `@openai/codex` | `codex --version` |
 | Qwen API Key | DashScope 北京区 key（ASR/TTS/总结都用它） | 阿里云百炼控制台 |
 | usbipd-win | **烧录固件时才需要** | `usbipd --version` |
+| ripgrep | **只在跑仓库自检脚本时需要** | `rg --version` |
 
 > **不需要**：macOS、Tauri App、LaunchAgent、Keychain。
 
@@ -115,6 +116,15 @@ winget install --interactive --exact dorssel.usbipd-win
 
 > 装完要**重启**（或用管理员执行一次 `usbipd --version` 激活服务）。
 
+### ⑥ ripgrep（跑仓库自带的 `scripts/check-secrets.sh` / `eval-fast.sh` 才需要）
+
+```bash
+sudo apt-get install -y ripgrep
+```
+
+> 原项目的 `scripts/check-secrets.sh` 用 `rg` 扫密钥。**不装的话这两个脚本会直接报错**
+> （不是你的配置问题）。只想跑通链路、不做开发自检的话可以跳过。
+
 ## 2. 快速检查环境
 
 ```powershell
@@ -161,7 +171,7 @@ Host 需要 `QWEN_API_KEY`（DashScope 北京区）。**不要把 key 写进仓�
 ```bash
 # 写到仓库外（例如 ~/.config/eci/env），然后让 Host 能读到
 sudo tee -a /etc/environment >/dev/null <<'EOF'
-QWEN_API_KEY=sk-你的key
+QWEN_API_KEY=<在此填你的 DashScope key>
 EASY_CODEX_CLI=/usr/local/bin/codex
 EOF
 ```

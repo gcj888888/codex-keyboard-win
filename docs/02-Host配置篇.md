@@ -65,7 +65,7 @@ Host 需要 `QWEN_API_KEY`（DashScope 北京区）。**绝不写进仓库**：
 
 ```bash
 sudo tee -a /etc/environment >/dev/null <<'EOF'
-QWEN_API_KEY=sk-你的key
+QWEN_API_KEY=<在此填你的 DashScope key>
 EASY_CODEX_CLI=/usr/local/bin/codex
 EOF
 ```
