@@ -1,0 +1,54 @@
+--- a/firmware/main/platform/keyboard_audio.cpp
++++ b/firmware/main/platform/keyboard_audio.cpp
+@@ -58,9 +58,13 @@
+ constexpr std::size_t kAudioPacketMaxBytes =
+     ai_keyboard::kAudioPacketHeaderBytes + kAudioFrameBytes +
+     ai_keyboard::kAudioPacketAuthTagBytes;
+-// 采集和网络发送分属两个任务。队列覆盖约 1.28s 音频，短暂重连不会阻塞
+-// I2S；更长的中断会显式表现为序号缺口，由 Host 丢弃整次 capture。
+-constexpr std::size_t kAudioCaptureQueueFrames = 64;
++// 采集和网络发送分属两个任务。队列放在 PSRAM（256 × 652B ≈ 163KB），
++// 覆盖约 5.12 秒音频。原为 64 帧 / 1.28 秒——实测一次 Wi-Fi 卡顿就会溢出，
++// 溢出会丢帧、进而触发下面的序号缺口路径，把用户整句话作废，所以拉到 5 秒级。
++constexpr std::size_t kAudioCaptureQueueFrames = 256;
++// 与 Host 侧的 MAX_CAPTURE_GAP_FRAMES 对齐：缺口 ≤10 帧（200ms）时不作废整次
++// 录音，而是把计数追平后继续发送，缺口由 Host 补静音补上。
++constexpr std::uint32_t kAudioMaxToleratedGapFrames = 10;
+ constexpr std::uint32_t kAudioStreamTaskStack = 6144;
+ constexpr std::uint32_t kAudioCaptureTaskStack = 4096;
+ constexpr std::uint32_t kControlHeartbeatIntervalMs = 2000;
+@@ -1993,14 +1997,26 @@
+     }
+ 
+     if (pending_frame.capture_sequence != sent_packets) {
+-      stop_reason = "capture_sequence_gap";
+-      final_status = "udp_send_failed";
+-      note_audio_error(final_status, stop_reason, false, true);
+-      lock();
+-      session_lifecycle_.request_stop(0, stop_reason);
+-      lease_armed_ = false;
+-      unlock();
+-      break;
++      const std::uint32_t gap_frames =
++          pending_frame.capture_sequence - sent_packets;
++      if (gap_frames <= kAudioMaxToleratedGapFrames) {
++        // 只丢了一两帧就让整句话作废太亏：Host 本来就允许 ≤10 帧的序号缺口
++        // 并会自己补静音。这里与它对齐——把计数追平后照常发这一帧。
++        ESP_LOGW(kTag,
++                 "keyboard mic capture gap tolerated frames=%lu next=%lu",
++                 static_cast<unsigned long>(gap_frames),
++                 static_cast<unsigned long>(sent_packets));
++        sent_packets = pending_frame.capture_sequence;
++      } else {
++        stop_reason = "capture_sequence_gap";
++        final_status = "udp_send_failed";
++        note_audio_error(final_status, stop_reason, false, true);
++        lock();
++        session_lifecycle_.request_stop(0, stop_reason);
++        lease_armed_ = false;
++        unlock();
++        break;
++      }
+     }
+ 
+     const ai_keyboard::AudioPacketMetadata metadata{

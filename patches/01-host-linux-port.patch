@@ -1,0 +1,1474 @@
+--- a/app/host/examples/m4_spark_gate.rs
++++ b/app/host/examples/m4_spark_gate.rs
+@@ -67,7 +67,8 @@
+         || outcome.isolation.persistent_runtime_rows != 0
+         || outcome.isolation.workspace_max_nodes > SPARK_MAX_WORKSPACE_NODES
+         || outcome.isolation.workspace_max_bytes > SPARK_MAX_WORKSPACE_BYTES
+-        || !prompt_isolation.skills_confined
++        || prompt_isolation.skills_instruction_blocks != 0
++        || prompt_isolation.skill_path_mentions != 0
+     {
+         return Err("Spark isolation gate failed".into());
+     }
+--- a/app/host/src/codex_runner.rs
++++ b/app/host/src/codex_runner.rs
+@@ -20,6 +20,21 @@
+ pub const SUPERVISOR_CLI_MISSING_EXIT: i32 = 78;
+ pub const SUPERVISOR_IO_EXIT: i32 = 79;
+ 
++/// 把本机当前时间作为环境信息附在用户指令前面。
++///
++/// 背景：Codex 的上下文里只有日期与时区，不会为了取时间而执行 `date`，
++/// 所以"现在几点"这类问题会被答成"我无法获取精确时间"。
++/// 这里把时间直接喂给它，问题即消失。
++fn augment_prompt(transcript: &str) -> String {
++    format!(
++        "<环境信息>当前本机时间：{} {}（时区 Asia/Shanghai）。\
++用户若询问当前时间，请直接使用这个时间回答，不要声称无法获取。\n\n{}",
++        crate::local_datetime_human(),
++        crate::local_weekday_cn(),
++        transcript
++    )
++}
++
+ #[derive(Debug, Clone)]
+ pub struct CodexRunnerConfig {
+     pub executable: PathBuf,
+@@ -209,7 +224,8 @@
+                 .set_nonblocking(true)
+                 .map_err(|_| JobFailureKind::ProcessIo)?;
+         }
+-        self.drive_child(child, parent_control, job.prompt.as_bytes(), cancel)
++        let prompt = augment_prompt(&job.prompt);
++        self.drive_child(child, parent_control, prompt.as_bytes(), cancel)
+     }
+ 
+     fn drive_child(
+@@ -514,6 +530,10 @@
+ }
+ 
+ fn classify_stderr(stderr: &[u8]) -> JobFailureKind {
++    crate::elog!(
++        "job_stderr_raw={}",
++        String::from_utf8_lossy(stderr).replace('\n', " | ")
++    );
+     let text = String::from_utf8_lossy(stderr).to_ascii_lowercase();
+     if text.contains("not logged in")
+         || text.contains("authentication")
+--- a/app/host/src/dashscope.rs
++++ b/app/host/src/dashscope.rs
+@@ -1443,7 +1443,7 @@
+         }),
+     )
+     .map_err(|_| {
+-        eprintln!("tts_session=failed phase=commit_write");
++        crate::elog!("tts_session=failed phase=commit_write");
+         ambiguous_after_commit()
+     })?;
+ 
+@@ -1518,7 +1518,7 @@
+     state: &TtsSessionState,
+     failure: AttemptFailure,
+ ) -> AttemptFailure {
+-    eprintln!(
++    crate::elog!(
+         "tts_session=failed phase={phase} committed={} response_created={} audio_received={} audio_done={} content_done={} item_done={} response_done={} deltas={} pcm_bytes={}",
+         state.committed,
+         state.response_id.is_some(),
+@@ -1564,7 +1564,7 @@
+                 } else {
+                     0
+                 };
+-                eprintln!("tts_session=peer_close code={close_code}");
++                crate::elog!("tts_session=peer_close code={close_code}");
+                 return Err(protocol_failure(request_submitted));
+             }
+             0x9 => write_masked_pong(stream, &frame.payload).map_err(|_| {
+--- a/app/host/src/health.rs
++++ b/app/host/src/health.rs
+@@ -327,12 +327,12 @@
+                     &prompt.request_id,
+                     &prompt.transcript,
+                 ) {
+-                    eprintln!(
++                    crate::elog!(
+                         "lan_voice_enqueue_rejected slot={} error={error}",
+                         prompt.slot
+                     );
+                 } else {
+-                    eprintln!("lan_voice_enqueued slot={}", prompt.slot);
++                    crate::elog!("lan_voice_enqueued slot={}", prompt.slot);
+                 }
+             }
+             #[cfg(any(all(target_os = "macos", not(test)), all(target_os = "linux", not(test))))]
+@@ -434,7 +434,7 @@
+     match event {
+         LanPlaybackEvent::Request(request) => {
+             if let Err(error) = begin_lan_playback(request, store, ingress, cache, active) {
+-                eprintln!("lan_playback=request_rejected error={error}");
++                crate::elog!("lan_playback=request_rejected error={error}");
+             }
+         }
+         LanPlaybackEvent::Finished(finished) => {
+@@ -451,7 +451,7 @@
+                     Ok(true) => playback.heard_committed = true,
+                     Ok(false) => return,
+                     Err(error) => {
+-                        eprintln!("lan_playback=finish_rejected error={error}");
++                        crate::elog!("lan_playback=finish_rejected error={error}");
+                         return;
+                     }
+                 }
+@@ -459,17 +459,17 @@
+             match cache.reconcile_with(|| store.retained_summary_cache_references()) {
+                 Ok(Ok(_)) => {}
+                 Ok(Err(error)) => {
+-                    eprintln!("lan_playback=cleanup_deferred error={error}");
++                    crate::elog!("lan_playback=cleanup_deferred error={error}");
+                     return;
+                 }
+                 Err(error) => {
+-                    eprintln!("lan_playback=cleanup_deferred error={error}");
++                    crate::elog!("lan_playback=cleanup_deferred error={error}");
+                     return;
+                 }
+             }
+             if ingress.acknowledge_playback_finished(finished.identity) {
+                 active.remove(&finished.identity.lease);
+-                eprintln!(
++                crate::elog!(
+                     "lan_playback=heard slot={} generation={}",
+                     finished.identity.slot, finished.identity.summary_generation
+                 );
+@@ -483,9 +483,9 @@
+                 return;
+             }
+             if let Err(error) = store.cancel_summary_playback(&playback.lease) {
+-                eprintln!("lan_playback=cancel_failed error={error}");
++                crate::elog!("lan_playback=cancel_failed error={error}");
+             } else {
+-                eprintln!(
++                crate::elog!(
+                     "lan_playback=cancelled slot={} generation={}",
+                     identity.slot, identity.summary_generation
+                 );
+@@ -546,7 +546,7 @@
+                 break;
+             }
+             Ok(None) => {
+-                eprintln!("lan_playback=no_unread slot={}", request.request.slot);
++                crate::elog!("lan_playback=no_unread slot={}", request.request.slot);
+                 return Ok(());
+             }
+             Err(StoreError::Sqlite(rusqlite::Error::SqliteFailure(error, _)))
+@@ -606,7 +606,7 @@
+             heard_committed: false,
+         },
+     );
+-    eprintln!(
++    crate::elog!(
+         "lan_playback=started slot={} generation={} bytes={} samples={} peak={} rms_permille={}",
+         identity.slot,
+         identity.summary_generation,
+--- a/app/host/src/lan_voice.rs
++++ b/app/host/src/lan_voice.rs
+@@ -278,7 +278,7 @@
+                                 }
+                             }
+                             Err(error) => {
+-                                eprintln!("lan_voice_rejected={}", error_code(&error));
++                                crate::elog!("lan_voice_rejected={}", error_code(&error));
+                             }
+                         },
+                         Err(mpsc::RecvTimeoutError::Timeout) => {}
+@@ -332,7 +332,7 @@
+                             } else if let Err(error) =
+                                 assembler.ingest(packet, source, Instant::now())
+                             {
+-                                eprintln!("lan_voice_rejected={}", error_code(&error));
++                                crate::elog!("lan_voice_rejected={}", error_code(&error));
+                             }
+                         }
+                         Err(error)
+@@ -348,17 +348,17 @@
+                             Ok(capture) => match capture_sender.try_send(capture) {
+                                 Ok(()) => {}
+                                 Err(TrySendError::Full(_)) => {
+-                                    eprintln!("lan_voice_rejected=capture_queue_full");
++                                    crate::elog!("lan_voice_rejected=capture_queue_full");
+                                 }
+                                 Err(TrySendError::Disconnected(_)) => return,
+                             },
+                             Err(error) => {
+-                                eprintln!("lan_voice_rejected={}", error_code(&error));
++                                crate::elog!("lan_voice_rejected={}", error_code(&error));
+                             }
+                         }
+                     }
+                     for error in assembler.expire_incomplete(Instant::now()) {
+-                        eprintln!("lan_voice_rejected={}", error_code(&error));
++                        crate::elog!("lan_voice_rejected={}", error_code(&error));
+                     }
+                     playback.tick(&socket, assembler.auth_key.as_ref(), &playback_event_sender);
+                 }
+@@ -547,7 +547,7 @@
+                     finish_deadline: Instant::now() + PLAYBACK_FINISH_TIMEOUT,
+                     started_at: Instant::now(),
+                 });
+-                eprintln!(
++                crate::elog!(
+                     "lan_playback=begin_sent slot={} generation={}",
+                     start.begin.identity.slot, start.begin.identity.summary_generation
+                 );
+@@ -640,12 +640,12 @@
+             let request = match decode_request(packet, key) {
+                 Ok(request) => request,
+                 Err(_) => {
+-                    eprintln!("lan_playback=request_invalid reason=authentication_or_format");
++                    crate::elog!("lan_playback=request_invalid reason=authentication_or_format");
+                     return;
+                 }
+             };
+             if !self.accept_request_generation(request) {
+-                eprintln!("lan_playback=request_replayed slot={}", request.slot);
++                crate::elog!("lan_playback=request_replayed slot={}", request.slot);
+                 return;
+             }
+             if let Some(transfer) = self.transfer.take() {
+@@ -692,7 +692,7 @@
+             if transfer.phase == PlaybackSendPhase::DeviceFinished {
+                 transfer.phase = PlaybackSendPhase::HostCommit;
+                 transfer.finish_deadline = Instant::now() + PLAYBACK_FINISH_TIMEOUT;
+-                eprintln!(
++                crate::elog!(
+                     "lan_playback=device_finished slot={} generation={}",
+                     finished.identity.slot, finished.identity.summary_generation
+                 );
+@@ -750,7 +750,7 @@
+             if requested_offset == transfer.acknowledged_offset {
+                 if transfer.retry_count >= PLAYBACK_MAX_RETRIES {
+                     let identity = transfer.begin.identity;
+-                    eprintln!(
++                    crate::elog!(
+                         "lan_playback=gap_retry_exhausted slot={} generation={} offset={}",
+                         identity.slot, identity.summary_generation, requested_offset
+                     );
+@@ -772,7 +772,7 @@
+         }
+         if ack.status != 0 {
+             let identity = transfer.begin.identity;
+-            eprintln!(
++            crate::elog!(
+                 "lan_playback=device_rejected slot={} generation={} status={} diagnostic={}",
+                 identity.slot,
+                 identity.summary_generation,
+@@ -798,7 +798,7 @@
+         }
+         match transfer.phase {
+             PlaybackSendPhase::BeginAck if ack.next_offset == 0 => {
+-                eprintln!(
++                crate::elog!(
+                     "lan_playback=begin_ack slot={} generation={}",
+                     ack.identity.slot, ack.identity.summary_generation
+                 );
+@@ -820,7 +820,7 @@
+                     return;
+                 }
+                 if transfer.acknowledged_offset == transfer.eiad.len() {
+-                    eprintln!(
++                    crate::elog!(
+                         "lan_playback=transfer_complete slot={} generation={} bytes={} elapsed_ms={}",
+                         ack.identity.slot,
+                         ack.identity.summary_generation,
+@@ -899,7 +899,7 @@
+         ) {
+             if now >= transfer.finish_deadline {
+                 let identity = transfer.begin.identity;
+-                eprintln!(
++                crate::elog!(
+                     "lan_playback=device_finish_timeout slot={} generation={}",
+                     identity.slot, identity.summary_generation
+                 );
+@@ -913,7 +913,7 @@
+         }
+         if transfer.retry_count >= PLAYBACK_MAX_RETRIES {
+             let identity = transfer.begin.identity;
+-            eprintln!(
++            crate::elog!(
+                 "lan_playback=transport_timeout slot={} generation={} phase={:?}",
+                 identity.slot, identity.summary_generation, transfer.phase
+             );
+@@ -1052,7 +1052,7 @@
+             return Err(LanVoiceError::CaptureLimit);
+         }
+         if missing_frames > 0 {
+-            eprintln!(
++            crate::elog!(
+                 "lan_voice_gap_filled slot={} frames={missing_frames}",
+                 capture.identity.slot
+             );
+@@ -1108,7 +1108,7 @@
+             return Err(LanVoiceError::InvalidSequence);
+         }
+         if missing_frames > 0 {
+-            eprintln!(
++            crate::elog!(
+                 "lan_voice_gap_filled slot={} frames={missing_frames}",
+                 capture.identity.slot
+             );
+@@ -1205,7 +1205,7 @@
+             wav.fill(0);
+             match qwen_result {
+                 Ok(transcript) => {
+-                    eprintln!(
++                    crate::elog!(
+                         "lan_voice_asr={} transport={} slot={}",
+                         transcript.model, transcript.transport, capture.identity.slot
+                     );
+@@ -1213,14 +1213,14 @@
+                 }
+                 Err(error) => {
+                     if !qwen_error_allows_offline_fallback(error) {
+-                        eprintln!("lan_voice_asr_error={}", asr_error_code(error));
++                        crate::elog!("lan_voice_asr_error={}", asr_error_code(error));
+                         return Err(map_qwen_error(error));
+                     }
+-                    eprintln!("lan_voice_asr_fallback={}", asr_error_code(error));
++                    crate::elog!("lan_voice_asr_fallback={}", asr_error_code(error));
+                 }
+             }
+         } else {
+-            eprintln!("lan_voice_asr_fallback=credential_missing");
++            crate::elog!("lan_voice_asr_fallback=credential_missing");
+         }
+         self.whisper.transcribe(&capture)
+     }
+--- a/app/host/src/lib.rs
++++ b/app/host/src/lib.rs
+@@ -1,3 +1,81 @@
++//! Host 的公共入口。
++//!
++//! 这里集中提供「带墙上时间戳的日志」与「给模型注入当前时间」两个小工具：
++//! 原先 Host 的每一条输出都没有时间，排查时只能靠行号猜先后顺序。
++
++use std::time::{SystemTime, UNIX_EPOCH};
++
++/// 取本机时区下的日历时间。
++fn local_tm() -> Option<libc::tm> {
++    let seconds = SystemTime::now()
++        .duration_since(UNIX_EPOCH)
++        .unwrap_or_default()
++        .as_secs() as libc::time_t;
++    let mut parts: libc::tm = unsafe { std::mem::zeroed() };
++    let converted = unsafe { libc::localtime_r(&seconds, &mut parts) };
++    if converted.is_null() { None } else { Some(parts) }
++}
++
++/// 日志用的时间戳：`YYYY-MM-DD HH:MM:SS.mmm`。
++pub fn time_stamp() -> String {
++    let now = SystemTime::now()
++        .duration_since(UNIX_EPOCH)
++        .unwrap_or_default();
++    let millis = now.subsec_millis();
++    match local_tm() {
++        Some(t) => format!(
++            "{:04}-{:02}-{:02} {:02}:{:02}:{:02}.{:03}",
++            t.tm_year + 1900,
++            t.tm_mon + 1,
++            t.tm_mday,
++            t.tm_hour,
++            t.tm_min,
++            t.tm_sec,
++            millis
++        ),
++        None => format!("{}.{:03}", now.as_secs(), millis),
++    }
++}
++
++/// 给人看的时间：`YYYY-MM-DD HH:MM:SS`（不带毫秒），用于注入模型上下文。
++pub fn local_datetime_human() -> String {
++    match local_tm() {
++        Some(t) => format!(
++            "{:04}-{:02}-{:02} {:02}:{:02}:{:02}",
++            t.tm_year + 1900,
++            t.tm_mon + 1,
++            t.tm_mday,
++            t.tm_hour,
++            t.tm_min,
++            t.tm_sec
++        ),
++        None => "未知".to_owned(),
++    }
++}
++
++/// 中文星期几。
++pub fn local_weekday_cn() -> &'static str {
++    match local_tm().map(|t| t.tm_wday) {
++        Some(0) => "星期日",
++        Some(1) => "星期一",
++        Some(2) => "星期二",
++        Some(3) => "星期三",
++        Some(4) => "星期四",
++        Some(5) => "星期五",
++        Some(6) => "星期六",
++        _ => "未知",
++    }
++}
++
++/// 带时间戳写 stderr。用法与 `eprintln!` 完全一致。
++#[macro_export]
++macro_rules! elog {
++    ($($arg:tt)*) => {{
++        let rendered = format!($($arg)*);
++        eprintln!("[{}] {}", $crate::time_stamp(), rendered);
++    }};
++}
++
+ pub mod audio;
+ pub mod bindings;
+ pub mod cache;
+--- a/app/host/src/main.rs
++++ b/app/host/src/main.rs
+@@ -3,10 +3,10 @@
+ use std::sync::atomic::AtomicBool;
+ 
+ use easy_codex_host::bindings::BindingService;
+-#[cfg(any(target_os = "macos", target_os = "linux"))]
++#[cfg(any(target_os = "macos", target_os = "linux"))]
+ use easy_codex_host::cache::{CacheLimits, CacheStore};
+ use easy_codex_host::codex_catalog::CodexTaskCatalog;
+-#[cfg(any(target_os = "macos", target_os = "linux"))]
++#[cfg(any(target_os = "macos", target_os = "linux"))]
+ use easy_codex_host::dashscope::DashScopeTtsClient;
+ use easy_codex_host::dashscope::{ASR_MODEL, DashScopeAsrClient, DashScopeHandshake};
+ use easy_codex_host::health::{HEALTH_SOCKET_NAME, HostDaemon, query_health};
+@@ -24,12 +24,12 @@
+     DashScopeEnvStore, ImportLock, KeychainAccounts, LocalCacheSecretStore, SecretStore,
+     configure_dashscope_env, dashscope_key_is_installed,
+ };
+-#[cfg(any(target_os = "macos", target_os = "linux"))]
++#[cfg(any(target_os = "macos", target_os = "linux"))]
+ use easy_codex_host::spark_runner::{SparkRunner, SparkRunnerConfig};
+ use easy_codex_host::store::StateStore;
+-#[cfg(any(target_os = "macos", target_os = "linux"))]
+-use easy_codex_host::summary_orchestrator::{
+-    DashScopeSummarySynthesizer, SummaryOrchestrator, SummaryRunOutcome,
++#[cfg(any(target_os = "macos", target_os = "linux"))]
++use easy_codex_host::summary_orchestrator::{
++    DashScopeSummarySynthesizer, SummaryOrchestrator, SummaryRunOutcome,
+ };
+ 
+ /// Fill in environment values this process is missing, using `/etc/environment`.
+@@ -44,7 +44,7 @@
+ #[cfg(target_os = "linux")]
+ fn load_environment_defaults() {
+     let Ok(contents) = std::fs::read_to_string("/etc/environment") else {
+-        eprintln!("env_defaults: /etc/environment unreadable");
++        easy_codex_host::elog!("env_defaults: /etc/environment unreadable");
+         return;
+     };
+     let mut filled: Vec<String> = Vec::new();
+@@ -74,7 +74,7 @@
+             filled.push(key.to_string());
+         }
+     }
+-    eprintln!("env_defaults:filled={}", filled.join(","));
++    easy_codex_host::elog!("env_defaults:filled={}", filled.join(","));
+ }
+ 
+ #[cfg(not(target_os = "linux"))]
+@@ -361,7 +361,7 @@
+     Ok(())
+ }
+ 
+-#[cfg(any(target_os = "macos", target_os = "linux"))]
++#[cfg(any(target_os = "macos", target_os = "linux"))]
+ fn summarize_slot(slot: u8) -> Result<(), Box<dyn std::error::Error>> {
+     let paths = home_paths()?;
+     paths.prepare()?;
+@@ -423,7 +423,7 @@
+     Ok(())
+ }
+ 
+-#[cfg(not(any(target_os = "macos", target_os = "linux")))]
++#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+ fn summarize_slot(_slot: u8) -> Result<(), Box<dyn std::error::Error>> {
+     Err("summarize-slot requires the macOS Host runtime".into())
+ }
+--- a/app/host/src/spark_runner.rs
++++ b/app/host/src/spark_runner.rs
+@@ -168,7 +168,6 @@
+     pub prompt_items: usize,
+     pub skills_instruction_blocks: usize,
+     pub skill_path_mentions: usize,
+-    pub skills_confined: bool,
+     pub workspace_max_nodes: usize,
+     pub workspace_max_bytes: u64,
+ }
+@@ -259,7 +258,7 @@
+         let prompt = build_prompt(claim, previous_unheard)?;
+         let mut auth = AuthSnapshot::load(&self.config.auth_path)?;
+         secure_directory(&self.config.temp_root).map_err(|err| {
+-            eprintln!(
++            crate::elog!(
+                 "spark_workspace: path={} error={}",
+                 self.config.temp_root.display(),
+                 err
+@@ -274,11 +273,11 @@
+         auth.bytes.zeroize();
+         auth.bytes.clear();
+         auth.verify_source(&self.config.auth_path)?;
+-        eprintln!("spark_debug=step20_auth_verified");
++        crate::elog!("spark_debug=step20_auth_verified");
+         let output_monitor = OutputFileMonitor::new(&run.output, &run.output_file)?;
+-        eprintln!("spark_debug=step21_output_monitor");
++        crate::elog!("spark_debug=step21_output_monitor");
+         let auth_monitor = AuthCopyMonitor::new(&run.codex_home.join("auth.json"), &run.auth_file)?;
+-        eprintln!("spark_debug=step22_auth_monitor");
++        crate::elog!("spark_debug=step22_auth_monitor");
+         let workspace_monitor = SparkWorkspaceMonitor::new(
+             &run.codex_home,
+             &run.auth_file,
+@@ -289,7 +288,7 @@
+             &run.tmpdir,
+             &self.config.executable,
+         )?;
+-        eprintln!("spark_debug=step23_workspace_monitor");
++        crate::elog!("spark_debug=step23_workspace_monitor");
+ 
+         let supervise = cfg!(target_os = "macos") && self.config.supervisor_executable.is_some();
+         let (mut parent_control, child_control) = if supervise {
+@@ -377,7 +376,7 @@
+             return Err(SparkError::Cancelled);
+         }
+         let deadline = Instant::now() + self.config.timeout;
+-        eprintln!("spark_debug=step24_spawn_child");
++        crate::elog!("spark_debug=step24_spawn_child");
+         let mut child = command.spawn().map_err(|error| {
+             if error.kind() == std::io::ErrorKind::NotFound {
+                 SparkError::CliMissing
+@@ -431,7 +430,7 @@
+             }
+         }
+         child = startup_guard.into_child();
+-        eprintln!("spark_debug=step25_drive_child");
++        crate::elog!("spark_debug=step25_drive_child");
+         self.drive_child(
+             child,
+             parent_control,
+@@ -445,9 +444,9 @@
+         workspace_monitor.check()?;
+         validate_runtime_databases(&run.codex_home)?;
+         auth.verify_source(&self.config.auth_path)?;
+-        eprintln!("spark_expected_raw expected={:?}", expected_covers);
++        crate::elog!("spark_expected_raw expected={:?}", expected_covers);
+         let bytes = read_bounded_output(&run.output, output_monitor.identity)?;
+-        eprintln!(
++        crate::elog!(
+             "spark_output_raw len={} content={}",
+             bytes.len(),
+             String::from_utf8_lossy(bytes.as_slice())
+@@ -513,16 +512,8 @@
+                 return Err(error);
+             }
+             if let Err(error) = workspace_monitor.check() {
+-                let child_status = guard.child_mut().try_wait().ok().flatten();
+                 guard.kill_and_wait();
+-                let _ = stdout_reader.join();
+-                let stderr_dump = stderr_reader.join().unwrap_or_default();
+-                let _ = stdin_writer.join();
+-                eprintln!(
+-                    "spark_debug=ws_fail child_status={:?} stderr={:?}",
+-                    child_status.map(|s| s.code()),
+-                    String::from_utf8_lossy(&stderr_dump)
+-                );
++                join_io_threads(stdout_reader, stderr_reader, stdin_writer);
+                 return Err(error);
+             }
+             if let Some(control) = control.as_mut() {
+@@ -609,6 +600,16 @@
+                 .as_ref()
+                 .is_some_and(std::process::ExitStatus::success);
+         if !succeeded {
++            crate::elog!(
++                "spark_child_fail status={:?} supervisor_code={:?} stderr_len={} stderr={}",
++                status,
++                supervisor_code,
++                stderr.len(),
++                String::from_utf8_lossy(stderr.as_slice())
++                    .chars()
++                    .take(1600)
++                    .collect::<String>()
++            );
+             if status.as_ref().and_then(|status| status.signal()).is_some() {
+                 return Err(SparkError::ExitFailure);
+             }
+@@ -820,27 +821,27 @@
+ 
+ impl SparkRunFiles {
+     fn create(temp_root: &Path, auth: &[u8], task_id: &str) -> Result<Self, SparkError> {
+-        eprintln!("spark_debug=step1_process_state_lock");
++        crate::elog!("spark_debug=step1_process_state_lock");
+         let mut process_state = spark_process_state()
+             .lock()
+             .map_err(|_| SparkError::UnsafeWorkspace)?;
+-        eprintln!("spark_debug=step2_open_sweep_lock");
++        crate::elog!("spark_debug=step2_open_sweep_lock");
+         let sweep_lock = open_private_file(&temp_root.join(".sweep.lock"))
+             .map_err(|_| SparkError::UnsafeWorkspace)?;
+-        eprintln!("spark_debug=step3_lock_exclusive");
++        crate::elog!("spark_debug=step3_lock_exclusive");
+         sweep_lock
+             .lock_exclusive()
+             .map_err(|_| SparkError::UnsafeWorkspace)?;
+         let sweep_lock = ExplicitFileLock::from_locked(sweep_lock);
+         let task_lock_path = temp_root.join(task_lock_name(task_id));
+-        eprintln!("spark_debug=step4_live_tasks_check");
++        crate::elog!("spark_debug=step4_live_tasks_check");
+         if process_state.live_tasks.contains(&task_lock_path) {
+             return Err(SparkError::Busy);
+         }
+         let task_guardian_path = temp_root.join(task_guardian_socket_name(task_id));
+-        eprintln!("spark_debug=step5_guardian_check");
++        crate::elog!("spark_debug=step5_guardian_check");
+         remove_stale_guardian_or_report_busy(&task_guardian_path)?;
+-        eprintln!("spark_debug=step6_open_task_lock");
++        crate::elog!("spark_debug=step6_open_task_lock");
+         let task_lock =
+             open_private_file(&task_lock_path).map_err(|_| SparkError::UnsafeWorkspace)?;
+         match task_lock.try_lock_exclusive() {
+@@ -851,25 +852,25 @@
+             Err(_) => return Err(SparkError::UnsafeWorkspace),
+         }
+         let task_lock = ExplicitFileLock::from_locked(task_lock);
+-        eprintln!("spark_debug=step7_sweep_stale_runs");
++        crate::elog!("spark_debug=step7_sweep_stale_runs");
+         sweep_stale_runs(temp_root, &process_state.live_runs)?;
+-        eprintln!("spark_debug=step8_tempdir");
++        crate::elog!("spark_debug=step8_tempdir");
+         let root = Builder::new()
+             .prefix("spark-")
+             .tempdir_in(temp_root)
+             .map_err(|_| SparkError::UnsafeWorkspace)?;
+-        eprintln!("spark_debug=step9_chmod_root");
++        crate::elog!("spark_debug=step9_chmod_root");
+         fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700))
+             .map_err(|_| SparkError::UnsafeWorkspace)?;
+-        eprintln!("spark_debug=step10_owner_lock");
++        crate::elog!("spark_debug=step10_owner_lock");
+         let owner_lock = open_private_file(&root.path().join("owner.lock")).map_err(|e| {
+-            eprintln!("spark_debug=step10_failed root={:?} err={:?}", root.path(), e);
++            crate::elog!("spark_debug=step10_failed root={:?} err={:?}", root.path(), e);
+             SparkError::UnsafeWorkspace
+         })?;
+         owner_lock
+             .lock_exclusive()
+             .map_err(|_| SparkError::UnsafeWorkspace)?;
+-        eprintln!("spark_debug=step11_owner_lock_exclusive");
++        crate::elog!("spark_debug=step11_owner_lock_exclusive");
+         let owner_lock = ExplicitFileLock::from_locked(owner_lock);
+         let owner_guardian = root.path().join("guardian.sock");
+         let codex_home = root.path().join("home");
+@@ -880,12 +881,12 @@
+             fs::set_permissions(directory, fs::Permissions::from_mode(0o700))
+                 .map_err(|_| SparkError::UnsafeWorkspace)?;
+         }
+-        eprintln!("spark_debug=step12_home_work_tmp_dirs");
++        crate::elog!("spark_debug=step12_home_work_tmp_dirs");
+         let auth_file = write_new_file(&codex_home.join("auth.json"), auth, 0o400)?;
+-        eprintln!("spark_debug=step13_auth_json");
++        crate::elog!("spark_debug=step13_auth_json");
+         let sandbox_marker_file =
+             write_new_file(&codex_home.join(".sandbox_migration"), b"v1\n", 0o400)?;
+-        eprintln!("spark_debug=step14_sandbox_marker");
++        crate::elog!("spark_debug=step14_sandbox_marker");
+         let skills_dir = codex_home.join("skills");
+         let home_tmpdir = codex_home.join("tmp");
+         for directory in [&skills_dir, &home_tmpdir] {
+@@ -899,16 +900,16 @@
+             fs::set_permissions(directory, fs::Permissions::from_mode(0o500))
+                 .map_err(|_| SparkError::UnsafeWorkspace)?;
+         }
+-        eprintln!("spark_debug=step15_skills_tmp_dirs");
++        crate::elog!("spark_debug=step15_skills_tmp_dirs");
+         let schema = root.path().join("summary.schema.json");
+         let output = root.path().join("summary.output.json");
+         drop(write_new_file(&schema, output_schema().as_bytes(), 0o400)?);
+-        eprintln!("spark_debug=step16_schema");
++        crate::elog!("spark_debug=step16_schema");
+         let output_file = write_new_file(&output, b"", 0o600)?;
+-        eprintln!("spark_debug=step17_output");
++        crate::elog!("spark_debug=step17_output");
+         fs::set_permissions(&workdir, fs::Permissions::from_mode(0o500))
+             .map_err(|_| SparkError::UnsafeWorkspace)?;
+-        eprintln!("spark_debug=step18_workdir_500");
++        crate::elog!("spark_debug=step18_workdir_500");
+         drop(sweep_lock);
+         let registry_run = root.path().to_path_buf();
+         process_state.live_runs.insert(registry_run);
+@@ -1447,23 +1448,18 @@
+     }
+ 
+     fn check(&self) -> Result<(), SparkError> {
+-        // Codex on Linux populates the arg0 sandbox scratch incrementally
+-        // (lock + helper symlinks one syscall at a time), so a strict 3-attempt
+-        // check races the setup window and fails on perfectly valid workspaces.
+-        // Give transient startup states ~600ms to settle; persistent violations
+-        // still fail deterministically.
+-        for attempt in 0..600 {
++        for attempt in 0..3 {
+             match self.audit() {
+                 Ok((nodes, bytes)) => {
+                     self.max_nodes.fetch_max(nodes, Ordering::Relaxed);
+                     self.max_bytes.fetch_max(bytes, Ordering::Relaxed);
+                     return Ok(());
+                 }
+-                Err(error) if attempt == 599 => {
++                Err(error) if attempt == 2 => {
+                     self.debug_dump();
+                     return Err(error);
+                 }
+-                Err(_) => thread::sleep(Duration::from_millis(10)),
++                Err(_) => thread::sleep(Duration::from_millis(1)),
+             }
+         }
+         unreachable!()
+@@ -1471,14 +1467,16 @@
+ 
+     fn debug_dump(&self) {
+         for base in [&self.root, &self.process_tmp] {
+-            if let Ok(md) = fs::symlink_metadata(base) {
+-                eprintln!(
+-                    "spark_debug=dump base={:?} mode={:o} uid={} nlink={}",
+-                    base,
+-                    md.mode() & 0o777,
++            crate::elog!("spark_debug=dump base={:?}", base);
++            match fs::symlink_metadata(base) {
++                Ok(md) => crate::elog!(
++                    "spark_debug=dump_self mode={:o} uid={} isdir={} path={:?}",
++                    md.mode() & 0o7777,
+                     md.uid(),
+-                    md.nlink()
+-                );
++                    md.is_dir(),
++                    base
++                ),
++                Err(error) => crate::elog!("spark_debug=dump_self ERR {error} path={:?}", base),
+             }
+             if let Ok(entries) = fs::read_dir(base) {
+                 for entry in entries.flatten() {
+@@ -1489,7 +1487,7 @@
+     }
+ 
+     fn debug_dump_entry(path: PathBuf, depth: usize) {
+-        if depth > 5 {
++        if depth > 4 {
+             return;
+         }
+         if let Ok(md) = fs::symlink_metadata(&path) {
+@@ -1501,13 +1499,12 @@
+             } else {
+                 String::new()
+             };
+-            eprintln!(
+-                "spark_debug=dump {:indent$}mode={:o} uid={} size={} ino={} path={:?} {}",
++            crate::elog!(
++                "spark_debug=dump {:indent$}mode={:o} uid={} size={} path={:?} {}",
+                 "",
+                 md.mode() & 0o7777,
+                 md.uid(),
+                 md.len(),
+-                md.ino(),
+                 path,
+                 kind,
+                 indent = depth * 2
+@@ -1525,6 +1522,13 @@
+     fn audit(&self) -> Result<(usize, u64), SparkError> {
+         let metadata = fs::symlink_metadata(&self.root).map_err(|_| SparkError::UnsafeWorkspace)?;
+         if !private_directory_matches(&metadata, 0o700, self.root_identity) {
++            crate::elog!(
++                "spark_fail=root_not_0700 mode={:o} uid={} path={:?}",
++                metadata.mode() & 0o7777,
++                metadata.uid(),
++                self.root
++            );
++            crate::elog!("ws_fail:region=audit line=9");
+             return Err(SparkError::UnsafeWorkspace);
+         }
+ 
+@@ -1538,23 +1542,14 @@
+                 .map_err(|_| SparkError::UnsafeWorkspace)?;
+             let metadata =
+                 fs::symlink_metadata(entry.path()).map_err(|_| SparkError::UnsafeWorkspace)?;
+-            eprintln!(
+-                "spark_debug=audit_iter name={:?} mode={:o} uid={} len={} isdir={} isfile={} islink={} nlink={}",
+-                name,
+-                metadata.mode() & 0o777,
+-                metadata.uid(),
+-                metadata.len(),
+-                metadata.file_type().is_dir(),
+-                metadata.file_type().is_file(),
+-                metadata.file_type().is_symlink(),
+-                metadata.nlink()
+-            );
+             let is_auth = name == "auth.json" && self.auth_identity.is_some();
+             nodes = nodes.checked_add(1).ok_or(SparkError::UnsafeWorkspace)?;
+             if nodes > SPARK_MAX_WORKSPACE_NODES {
++                crate::elog!("ws_fail:region=audit line=25");
+                 return Err(SparkError::UnsafeWorkspace);
+             }
+             if metadata.uid() != unsafe { libc::geteuid() } {
++                crate::elog!("ws_fail:region=audit line=28 kind=auth_or_ws");
+                 return Err(if is_auth {
+                     SparkError::Authentication
+                 } else {
+@@ -1562,99 +1557,60 @@
+                 });
+             }
+             if is_auth && !metadata.file_type().is_file() {
++                crate::elog!("ws_fail:region=audit line=35 kind=authentication");
+                 return Err(SparkError::Authentication);
+             }
+ 
+             if metadata.file_type().is_dir() {
+                 if name == "skills" {
++                    // 新版 Codex 会自动把内置技能写进 skills（skills/.system/skill-creator/...），
++                    // 因此这里只校验目录本身的归属与权限，不再要求它为空。
+                     if !private_directory_matches(&metadata, 0o500, self.skills_identity) {
+-                        eprintln!("spark_debug=audit_fail stage=skills_identity name={:?} mode={:o} uid={}", name, metadata.mode() & 0o777, metadata.uid());
+-                        return Err(SparkError::UnsafeWorkspace);
+-                    }
+-                    // Codex 0.155+ installs its bundled system skills into
+-                    // `skills/.system/` and records an `installation_id` file
+-                    // on first exec. Both are written by the codex CLI itself,
+-                    // never by the model, so allow exactly those; anything
+-                    // else means pollution.
+-                    let children =
+-                        fs::read_dir(entry.path()).map_err(|_| SparkError::UnsafeWorkspace)?;
+-                    for child in children {
+-                        let child = child.map_err(|_| SparkError::UnsafeWorkspace)?;
+-                        let child_name = child.file_name();
+-                        let is_system = child_name == ".system"
+-                            && fs::symlink_metadata(child.path()).is_ok_and(|metadata| {
+-                                metadata.file_type().is_dir()
+-                                    && metadata.uid() == unsafe { libc::geteuid() }
+-                            });
+-                        let is_installation_id = child_name == "installation_id"
+-                            && fs::symlink_metadata(child.path()).is_ok_and(|metadata| {
+-                                metadata.file_type().is_file()
+-                                    && metadata.uid() == unsafe { libc::geteuid() }
+-                            });
+-                        if !is_system && !is_installation_id {
+-                            eprintln!("spark_debug=audit_fail stage=skills_child name={:?}", child_name);
+-                            return Err(SparkError::UnsafeWorkspace);
+-                        }
+-                        nodes = nodes.checked_add(1).ok_or(SparkError::UnsafeWorkspace)?;
+-                    }
+-                    if nodes > SPARK_MAX_WORKSPACE_NODES {
++                        crate::elog!("ws_fail:region=audit line=46");
+                         return Err(SparkError::UnsafeWorkspace);
+                     }
+                 } else if name == "tmp" {
+                     if !private_directory_matches(&metadata, 0o500, self.tmp_identity) {
+-                        eprintln!("spark_debug=audit_fail stage=tmp_identity name={:?} mode={:o} uid={}", name, metadata.mode() & 0o777, metadata.uid());
++                        crate::elog!("ws_fail:region=audit line=50");
+                         return Err(SparkError::UnsafeWorkspace);
+                     }
+                     let mut children =
+                         fs::read_dir(entry.path()).map_err(|_| SparkError::UnsafeWorkspace)?;
+-                    let child = children.next();
+-                    if let Some(child) = child {
+-                        let child = child.map_err(|_| SparkError::UnsafeWorkspace)?;
+-                        if children.next().is_some()
+-                            || child.file_name() != "arg0"
+-                            || !fs::symlink_metadata(child.path()).is_ok_and(|metadata| {
+-                                private_directory_matches(&metadata, 0o700, self.arg0_identity)
+-                            })
+-                        {
+-                            eprintln!("spark_debug=audit_fail stage=tmp_arg0 children_err name={:?}", name);
+-                            return Err(SparkError::UnsafeWorkspace);
+-                        }
+-                        let (arg0_nodes, arg0_bytes) =
+-                            audit_arg0_scratch(&child.path(), &self.alias_target)?;
+-                        nodes = nodes
+-                            .checked_add(1 + arg0_nodes)
+-                            .ok_or(SparkError::UnsafeWorkspace)?;
+-                        bytes = bytes
+-                            .checked_add(arg0_bytes)
+-                            .filter(|bytes| *bytes <= SPARK_MAX_WORKSPACE_BYTES)
+-                            .ok_or(SparkError::UnsafeWorkspace)?;
+-                    }
+-                    if nodes > SPARK_MAX_WORKSPACE_NODES {
+-                        eprintln!("spark_debug=audit_fail stage=tmp_nodes nodes={}", nodes);
++                    let child = children
++                        .next()
++                        .ok_or(SparkError::UnsafeWorkspace)?
++                        .map_err(|_| SparkError::UnsafeWorkspace)?;
++                    if children.next().is_some()
++                        || child.file_name() != "arg0"
++                        || !fs::symlink_metadata(child.path()).is_ok_and(|metadata| {
++                            private_directory_matches(&metadata, 0o700, self.arg0_identity)
++                        })
++                    {
++                        crate::elog!("ws_fail:region=audit line=64");
+                         return Err(SparkError::UnsafeWorkspace);
+                     }
+-                } else if name == ".tmp" || name == "shell_snapshots" {
+-                    // Codex 0.155+ keeps its own transient scratch (plugin git
+-                    // clones) in `CODEX_HOME/.tmp` and an (usually empty)
+-                    // `CODEX_HOME/shell_snapshots`. Both are written by the
+-                    // codex CLI itself, never by the model, so verify owner and
+-                    // mode but do not account their subtree against the
+-                    // workspace budget.
+-                    if !metadata.file_type().is_dir()
+-                        || metadata.uid() != unsafe { libc::geteuid() }
+-                        || metadata.mode() & 0o777 != 0o700
+-                    {
+-                        eprintln!("spark_debug=audit_fail stage=scratch_dir_shape name={:?} mode={:o} uid={}", name, metadata.mode() & 0o777, metadata.uid());
++                    let (arg0_nodes, arg0_bytes) =
++                        audit_arg0_scratch(&child.path(), &self.alias_target)?;
++                    nodes = nodes
++                        .checked_add(1 + arg0_nodes)
++                        .ok_or(SparkError::UnsafeWorkspace)?;
++                    bytes = bytes
++                        .checked_add(arg0_bytes)
++                        .filter(|bytes| *bytes <= SPARK_MAX_WORKSPACE_BYTES)
++                        .ok_or(SparkError::UnsafeWorkspace)?;
++                    if nodes > SPARK_MAX_WORKSPACE_NODES {
++                        crate::elog!("ws_fail:region=audit line=76");
+                         return Err(SparkError::UnsafeWorkspace);
+                     }
+                 } else {
+-                    eprintln!("spark_debug=audit_fail stage=unknown_dir name={:?} mode={:o} uid={}", name, metadata.mode() & 0o777, metadata.uid());
++                    crate::elog!("ws_fail:region=audit line=79");
+                     return Err(SparkError::UnsafeWorkspace);
+                 }
+                 continue;
+             }
+ 
+             if !metadata.file_type().is_file() || metadata.nlink() != 1 {
++                crate::elog!("ws_fail:region=audit line=85 kind=auth_or_ws");
+                 return Err(if is_auth {
+                     SparkError::Authentication
+                 } else {
+@@ -1668,6 +1624,7 @@
+                     .is_some_and(|identity| identity.matches(&metadata))
+                     || mode != 0o400
+                 {
++                    crate::elog!("ws_fail:region=audit line=98 kind=auth_or_ws");
+                     return Err(if is_auth {
+                         SparkError::Authentication
+                     } else {
+@@ -1675,6 +1632,7 @@
+                     });
+                 }
+                 if metadata.len() == 0 || metadata.len() > MAX_AUTH_BYTES {
++                    crate::elog!("ws_fail:region=audit line=105 kind=auth_or_ws");
+                     return Err(if is_auth {
+                         SparkError::Authentication
+                     } else {
+@@ -1687,16 +1645,19 @@
+                     || mode != 0o400
+                     || metadata.len() != 3
+                 {
++                    crate::elog!("ws_fail:region=audit line=117");
+                     return Err(SparkError::UnsafeWorkspace);
+                 }
+                 3
+             } else {
+                 if mode & 0o133 != 0 {
++                    crate::elog!("ws_fail:region=audit line=122");
+                     return Err(SparkError::UnsafeWorkspace);
+                 }
+                 runtime_file_limit(&name).ok_or(SparkError::UnsafeWorkspace)?
+             };
+             if metadata.len() > limit {
++                crate::elog!("ws_fail:region=audit line=127");
+                 return Err(SparkError::UnsafeWorkspace);
+             }
+             bytes = bytes
+@@ -1705,21 +1666,19 @@
+                 .ok_or(SparkError::UnsafeWorkspace)?;
+         }
+         let metadata =
+-            fs::symlink_metadata(&self.process_tmp).map_err(|_| {
+-                eprintln!("spark_debug=audit_fail stage=process_tmp_missing path={:?}", self.process_tmp);
+-                SparkError::UnsafeWorkspace
+-            })?;
++            fs::symlink_metadata(&self.process_tmp).map_err(|_| SparkError::UnsafeWorkspace)?;
+         if !private_directory_matches(&metadata, 0o700, self.process_tmp_identity)
+             || fs::read_dir(&self.process_tmp)
+                 .map_err(|_| SparkError::UnsafeWorkspace)?
+                 .next()
+                 .is_some()
+         {
+-            eprintln!("spark_debug=audit_fail stage=process_tmp_shape mode={:o} uid={} path={:?}", metadata.mode() & 0o777, metadata.uid(), self.process_tmp);
++            crate::elog!("ws_fail:region=audit line=142");
+             return Err(SparkError::UnsafeWorkspace);
+         }
+         nodes = nodes.checked_add(1).ok_or(SparkError::UnsafeWorkspace)?;
+         if nodes > SPARK_MAX_WORKSPACE_NODES {
++            crate::elog!("ws_fail:region=audit line=146");
+             return Err(SparkError::UnsafeWorkspace);
+         }
+         Ok((nodes, bytes))
+@@ -1743,7 +1702,7 @@
+     };
+     let entry = entry.map_err(|_| SparkError::UnsafeWorkspace)?;
+     if entries.next().is_some() {
+-        eprintln!("spark_debug=audit_fail stage=arg0_multi_entries");
++        crate::elog!("ws_fail:region=arg0 line=7");
+         return Err(SparkError::UnsafeWorkspace);
+     }
+     let name = entry
+@@ -1754,7 +1713,7 @@
+         .strip_prefix("codex-arg0")
+         .ok_or(SparkError::UnsafeWorkspace)?;
+     if suffix.len() != 6 || !suffix.bytes().all(|byte| byte.is_ascii_alphanumeric()) {
+-        eprintln!("spark_debug=audit_fail stage=arg0_bad_name name={:?}", name);
++        crate::elog!("ws_fail:region=arg0 line=17");
+         return Err(SparkError::UnsafeWorkspace);
+     }
+     let metadata = fs::symlink_metadata(entry.path()).map_err(|_| SparkError::UnsafeWorkspace)?;
+@@ -1762,7 +1721,7 @@
+         || metadata.uid() != unsafe { libc::geteuid() }
+         || metadata.mode() & 0o777 != 0o755
+     {
+-        eprintln!("spark_debug=audit_fail stage=arg0_dir_shape mode={:o} uid={}", metadata.mode() & 0o777, metadata.uid());
++        crate::elog!("ws_fail:region=arg0 line=24");
+         return Err(SparkError::UnsafeWorkspace);
+     }
+ 
+@@ -1776,14 +1735,13 @@
+             .into_string()
+             .map_err(|_| SparkError::UnsafeWorkspace)?;
+         if !seen.insert(child_name.clone()) {
+-            eprintln!("spark_debug=audit_fail stage=arg0_dup name={:?}", child_name);
++            crate::elog!("ws_fail:region=arg0 line=37");
+             return Err(SparkError::UnsafeWorkspace);
+         }
+         let metadata =
+             fs::symlink_metadata(child.path()).map_err(|_| SparkError::UnsafeWorkspace)?;
+-        eprintln!("spark_debug=arg0_iter name={:?} mode={:o} uid={} len={} isdir={} isfile={} islink={} nlink={} target={:?} alias={:?}", child_name, metadata.mode() & 0o777, metadata.uid(), metadata.len(), metadata.file_type().is_dir(), metadata.file_type().is_file(), metadata.file_type().is_symlink(), metadata.nlink(), fs::read_link(child.path()).ok(), alias_target);
+         if metadata.uid() != unsafe { libc::geteuid() } || metadata.nlink() != 1 {
+-            eprintln!("spark_debug=audit_fail stage=arg0_owner_nlink name={:?} nlink={}", child_name, metadata.nlink());
++            crate::elog!("ws_fail:region=arg0 line=42");
+             return Err(SparkError::UnsafeWorkspace);
+         }
+         if child_name == ".lock" {
+@@ -1791,7 +1749,7 @@
+                 || metadata.mode() & 0o777 != 0o644
+                 || metadata.len() != 0
+             {
+-                eprintln!("spark_debug=audit_fail stage=arg0_lock_shape mode={:o} len={}", metadata.mode() & 0o777, metadata.len());
++                crate::elog!("ws_fail:region=arg0 line=49");
+                 return Err(SparkError::UnsafeWorkspace);
+             }
+         } else if matches!(
+@@ -1799,29 +1757,22 @@
+             "apply_patch" | "applypatch" | "codex-execve-wrapper" | "codex-linux-sandbox"
+         ) {
+             if !metadata.file_type().is_symlink() || metadata.len() > 4096 {
+-                eprintln!("spark_debug=audit_fail stage=arg0_symlink_shape name={:?} len={}", child_name, metadata.len());
++                crate::elog!("ws_fail:region=arg0 line=56");
+                 return Err(SparkError::UnsafeWorkspace);
+             }
+             let target = fs::read_link(child.path()).map_err(|_| SparkError::UnsafeWorkspace)?;
+-            // macOS: every wrapper points at the CLI executable itself.
+-            // Linux npm installs: the execve wrapper points at the vendored
+-            // binary shipped inside the codex package tree (e.g.
+-            // node_modules/@openai/codex-linux-x64/vendor/.../bin/codex).
+-            // Accept either, as long as the fallback target is a verified
+-            // safe executable inside the codex package directory.
+-            let trusted = target == alias_target
+-                || alias_target
+-                    .parent()
+-                    .and_then(Path::parent)
+-                    .is_some_and(|root| {
+-                        target.starts_with(root) && trusted_executable_path(&target).is_ok()
+-                    });
+-            if !trusted {
+-                eprintln!("spark_debug=audit_fail stage=arg0_target_mismatch name={:?} target={:?} alias={:?}", child_name, target, alias_target);
++            // Linux 版 Codex 会把这些别名指向「真实二进制所在的目录」,而不是二进制本身,
++            // 所以除精确相等外,额外接受一个确实含受信 codex 可执行文件的目录。
++            let trusted = is_trusted_codex_bin_dir(&target);
++            if target != alias_target && !trusted {
++                crate::elog!(
++                    "ws_dbg name={} target={:?} alias={:?} trusted={}",
++                    child_name, target, alias_target, trusted
++                );
+                 return Err(SparkError::UnsafeWorkspace);
+             }
+         } else {
+-            eprintln!("spark_debug=audit_fail stage=arg0_unknown_entry name={:?} mode={:o}", child_name, metadata.mode() & 0o777);
++            crate::elog!("ws_fail:region=arg0 line=65");
+             return Err(SparkError::UnsafeWorkspace);
+         }
+         nodes = nodes.checked_add(1).ok_or(SparkError::UnsafeWorkspace)?;
+@@ -1832,6 +1783,28 @@
+     Ok((nodes, bytes))
+ }
+ 
++/// Linux 版 Codex 的 arg0 别名有两种形态：指向「真实二进制所在目录」，或直接指向
++/// 二进制本身。两种都接受,但指向的 codex 必须是常规文件、属主可信、他人不可写、可执行。
++fn is_trusted_codex_bin_dir(target: &Path) -> bool {
++    let candidates = [target.join("codex"), target.to_path_buf()];
++    for candidate in candidates.iter() {
++        let Ok(metadata) = fs::symlink_metadata(candidate) else {
++            continue;
++        };
++        let owner = metadata.uid();
++        let mode = metadata.mode() & 0o777;
++        let is_file = metadata.file_type().is_file();
++        let trusted = is_file
++            && (owner == unsafe { libc::geteuid() } || owner == 0)
++            && mode & 0o022 == 0
++            && mode & 0o111 != 0;
++        if trusted {
++            return true;
++        }
++    }
++    false
++}
++
+ fn trusted_executable_path(executable: &Path) -> Result<PathBuf, SparkError> {
+     let path = fs::canonicalize(executable).map_err(|_| SparkError::CliMissing)?;
+     let metadata = fs::symlink_metadata(&path).map_err(|_| SparkError::CliMissing)?;
+@@ -1889,6 +1862,13 @@
+         | "logs_2.sqlite-shm"
+         | "state_5.sqlite-shm"
+         | "queue_1.sqlite-shm" => Some(MAX_RUNTIME_SHM_BYTES),
++        // SQLite 在 rollback-journal 模式下会额外建 <-journal> 文件(新建的库默认就是
++        // 这种模式),与 -wal 同级,给同样的上限。
++        "goals_1.sqlite-journal"
++        | "memories_1.sqlite-journal"
++        | "logs_2.sqlite-journal"
++        | "state_5.sqlite-journal"
++        | "queue_1.sqlite-journal" => Some(MAX_RUNTIME_WAL_BYTES),
+         _ => None,
+     }
+ }
+@@ -1996,7 +1976,8 @@
+         "model_reasoning_effort=\"high\"",
+     ]);
+     command.args(SPARK_PROVIDER_CONFIG);
+-    command.args(["--output-schema"]);
++    // `--output-schema` 必须紧邻它的文件路径,否则新版 Codex 会认为缺少取值。
++    command.arg("--output-schema");
+     command.arg(schema);
+     for feature in DISABLED_SPARK_FEATURES {
+         command.args(["--disable", feature]);
+@@ -2170,10 +2151,22 @@
+         return Err(SparkError::OutputTooLarge);
+     }
+     if !status.success() {
++        let classified = classify_stderr(&stderr);
++        crate::elog!(
++            "spark_child_fail code={:?} signal={:?} classified={:?} stderr_len={} stderr={}",
++            status.code(),
++            status.signal(),
++            classified,
++            stderr.len(),
++            String::from_utf8_lossy(&stderr)
++                .chars()
++                .take(1500)
++                .collect::<String>()
++        );
+         if status.signal().is_some() {
+             return Err(SparkError::ExitFailure);
+         }
+-        return Err(classify_stderr(&stderr));
++        return Err(classified);
+     }
+     monitor.check()?;
+     validate_runtime_databases(&home)?;
+@@ -2182,14 +2175,7 @@
+     let prompt_items = value.as_array().map_or(1, Vec::len);
+     let skills_instruction_blocks = count_json_string_matches(&value, "<skills_instructions>");
+     let skill_path_mentions = count_json_string_matches(&value, "SKILL.md");
+-    // Codex 0.155+ always injects its bundled system skills
+-    // (`skills/.system`) into the prompt; there is no flag to disable
+-    // that. The workspace audit above locks skills/ to exactly that
+-    // subtree, so any skills the model can see are the CLI's own,
+-    // never user or workspace content. Reject only prompts whose
+-    // skills escape the .system root.
+-    let skills_confined = prompt_skills_confined_to_system_root(&value, &home);
+-    if !skills_confined {
++    if skills_instruction_blocks != 0 || skill_path_mentions != 0 {
+         return Err(SparkError::UnsafeWorkspace);
+     }
+     let report = monitor.report();
+@@ -2197,7 +2183,6 @@
+         prompt_items,
+         skills_instruction_blocks,
+         skill_path_mentions,
+-        skills_confined,
+         workspace_max_nodes: report.workspace_max_nodes,
+         workspace_max_bytes: report.workspace_max_bytes,
+     })
+@@ -2218,54 +2203,6 @@
+     }
+ }
+ 
+-fn collect_json_strings(value: &serde_json::Value, out: &mut Vec<String>) {
+-    match value {
+-        serde_json::Value::Array(values) => {
+-            for value in values {
+-                collect_json_strings(value, out);
+-            }
+-        }
+-        serde_json::Value::Object(values) => {
+-            for value in values.values() {
+-                collect_json_strings(value, out);
+-            }
+-        }
+-        serde_json::Value::String(text) => out.push(text.clone()),
+-        _ => {}
+-    }
+-}
+-
+-fn prompt_skills_confined_to_system_root(value: &serde_json::Value, home: &Path) -> bool {
+-    let mut texts = Vec::new();
+-    collect_json_strings(value, &mut texts);
+-    let joined = texts.join("\n");
+-    if !joined.contains("<skills_instructions>") {
+-        return true;
+-    }
+-    let expected_root = format!("`r0` = `{}`", home.join("skills").join(".system").display());
+-    if !joined.contains(&expected_root) {
+-        return false;
+-    }
+-    let roots_idx = joined.find("### Skill roots").unwrap_or(0);
+-    let roots_section = &joined[roots_idx..];
+-    for other in ["`r1`", "`r2`", "`r3`", "`r4`", "`r5`"] {
+-        if roots_section.contains(other) {
+-            return false;
+-        }
+-    }
+-    for (idx, _) in joined.match_indices("SKILL.md") {
+-        if idx < roots_idx {
+-            continue;
+-        }
+-        let before = &joined[..idx];
+-        let window = &before[before.len().saturating_sub(160)..];
+-        if !window.contains("r0/") && !window.contains("skills/.system") {
+-            return false;
+-        }
+-    }
+-    true
+-}
+-
+ fn inherit_proxy_environment(command: &mut Command) {
+     for name in [
+         "HTTPS_PROXY",
+--- a/app/host/src/store.rs
++++ b/app/host/src/store.rs
+@@ -1415,6 +1415,7 @@
+                UNION
+                SELECT task_id FROM completion_ledger WHERE summarized_generation IS NULL
+              ) WHERE (?1 IS NULL OR task_id > ?1)
++               AND task_id IN (SELECT task_id FROM bindings)
+              ORDER BY task_id LIMIT 32",
+         )?;
+         let rows = statement.query_map([after_task_id], |row| row.get::<_, String>(0))?;
+--- a/app/host/src/summary.rs
++++ b/app/host/src/summary.rs
+@@ -32,12 +32,18 @@
+     pub exact_quote: String,
+ }
+ 
++/// 模型可能省略 schema 字段，缺失时按当前版本号处理。
++fn default_summary_schema() -> u8 {
++    SUMMARY_SCHEMA_VERSION
++}
++
+ #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+ #[serde(deny_unknown_fields)]
+ pub struct SummaryDocument {
++    #[serde(default = "default_summary_schema")]
+     pub schema: u8,
+-    // 输出 schema 中这三项是 required，但 qwen 系模型经 OpenAI 兼容接口
+-    // 对 json_schema 严格模式支持不完整，可能省略它们；缺失时按空数组处理。
++    // 这三个字段在输出 schema 里是 required，但部分 OpenAI 兼容接口对
++    // json_schema 严格模式支持不完整，模型可能省略它们；缺失时按空数组处理。
+     // 它们不影响语音朗读（spoken_text 才是朗读内容）。
+     #[serde(default)]
+     pub facts: Vec<String>,
+--- a/app/host/src/summary_orchestrator.rs
++++ b/app/host/src/summary_orchestrator.rs
+@@ -186,12 +186,15 @@
+         match self.recover_authenticated_cache(&claim, observer) {
+             Ok(Some(outcome)) => return Ok(outcome),
+             Ok(None) => {}
+-            Err(error) => return Err(error),
++            Err(error) => {
++                let _ = self.abandon(&claim);
++                return Err(error);
++            }
+         }
+ 
+         if let Some(attempt) = self.store.summary_tts_attempt(&claim)? {
+             self.abandon(&claim)?;
+-            eprintln!(
++            crate::elog!(
+                 "summary=abandoned_unpublished_tts_attempt state={attempt:?} generation={} resumed={}",
+                 claim.generation, resumed_after_process_restart
+             );
+@@ -232,7 +235,7 @@
+ 
+         if self.store.begin_summary_tts_attempt(&claim)? != SummaryTtsAttemptState::Started {
+             self.abandon(&claim)?;
+-            eprintln!(
++            crate::elog!(
+                 "summary=abandoned_unpublished_tts_attempt state=attempt_changed generation={}",
+                 claim.generation
+             );
+@@ -240,7 +243,7 @@
+         }
+         observer.reached(SummaryCheckpoint::TtsAttemptStarted);
+ 
+-        eprintln!(
++        crate::elog!(
+             "summary=tts_start generation={} characters={}",
+             claim.generation,
+             summary.spoken_text.chars().count()
+@@ -253,7 +256,7 @@
+             Ok(tts) => tts,
+             Err(TtsError::AmbiguousAfterCommit) => {
+                 self.abandon(&claim)?;
+-                eprintln!(
++                crate::elog!(
+                     "summary=abandoned_unpublished_tts_attempt state=tts_ambiguous generation={}",
+                     claim.generation
+                 );
+@@ -266,7 +269,7 @@
+         };
+         if tts.receipt().voice != SUMMARY_TTS_VOICE {
+             self.abandon(&claim)?;
+-            eprintln!(
++            crate::elog!(
+                 "summary=abandoned_unpublished_tts_attempt state=voice_mismatch generation={}",
+                 claim.generation
+             );
+@@ -289,12 +292,18 @@
+         );
+         let (unread, audio) = match committed {
+             Ok(Ok(published)) => published,
+-            Ok(Err(error)) => return Err(error.into()),
++            Ok(Err(error)) => {
++                // publish 失败（如 generation changed）必须立刻释放 claim，
++                // 否则留下僵尸 generating 行，后续重试全撞上
++                // "another summary generation is already running"。
++                let _ = self.abandon(&claim);
++                return Err(error.into());
++            }
+             Err(_) => match self.recover_authenticated_cache(&claim, observer) {
+                 Ok(Some(outcome)) => return Ok(outcome),
+                 Ok(None) => {
+                     self.abandon(&claim)?;
+-                    eprintln!(
++                    crate::elog!(
+                         "summary=abandoned_unpublished_tts_attempt state=cache_commit generation={}",
+                         claim.generation
+                     );
+--- a/app/host/src/summary_worker.rs
++++ b/app/host/src/summary_worker.rs
+@@ -21,8 +21,12 @@
+ };
+ 
+ const POLL_INTERVAL: Duration = Duration::from_millis(250);
+-const FAILURE_BACKOFF: Duration = Duration::from_secs(30);
++// 单次失败后的重试间隔：30s → 5s，让偶发失败（模型产出不合格）更快恢复。
++const FAILURE_BACKOFF: Duration = Duration::from_secs(5);
+ const MANUAL_BACKOFF: Duration = Duration::from_secs(60 * 60);
++// 连续失败多少次就"熔断"进入长退避，防止毒药 completion 无限重试烧钱：
++const FAILURE_GIVE_UP_COUNT: u32 = 5;
++const GIVE_UP_BACKOFF: Duration = Duration::from_secs(10 * 60);
+ 
+ pub fn run(
+     paths: AppPaths,
+@@ -31,14 +35,15 @@
+     shutdown: Arc<AtomicBool>,
+ ) {
+     let mut retry_after = HashMap::<String, Instant>::new();
++    let mut failures = HashMap::<String, u32>::new();
+     while !shutdown.load(Ordering::Acquire) {
+         match Runtime::open(&paths, Arc::clone(&cache)) {
+             Ok(runtime) => {
+-                run_ready(&mut store, &runtime, &shutdown, &mut retry_after);
++                run_ready(&mut store, &runtime, &shutdown, &mut retry_after, &mut failures);
+                 return;
+             }
+             Err(error) => {
+-                eprintln!("summary_runtime=unavailable error={error}");
++                crate::elog!("summary_runtime=unavailable error={error}");
+                 sleep_until_shutdown(&shutdown, FAILURE_BACKOFF);
+             }
+         }
+@@ -96,13 +101,14 @@
+     runtime: &Runtime,
+     shutdown: &AtomicBool,
+     retry_after: &mut HashMap<String, Instant>,
++    failures: &mut HashMap<String, u32>,
+ ) {
+     let mut scan_after = None::<String>;
+     while !shutdown.load(Ordering::Acquire) {
+         let tasks = match store.summary_work_tasks_after(scan_after.as_deref()) {
+             Ok(tasks) => tasks,
+             Err(error) => {
+-                eprintln!("summary_worker=store_error error={error}");
++                crate::elog!("summary_worker=store_error error={error}");
+                 sleep_until_shutdown(shutdown, FAILURE_BACKOFF);
+                 continue;
+             }
+@@ -140,25 +146,44 @@
+             match result {
+                 Ok(SummaryRunOutcome::Published { unread, .. }) => {
+                     retry_after.remove(&task_id);
+-                    eprintln!(
++                    failures.remove(&task_id);
++                    crate::elog!(
+                         "summary_worker=published generation={} coverage={}",
+                         unread.generation, unread.coverage_count
+                     );
+                 }
+                 Ok(SummaryRunOutcome::AlreadyPublished { generation }) => {
+                     retry_after.remove(&task_id);
+-                    eprintln!("summary_worker=already_published generation={generation}");
++                    failures.remove(&task_id);
++                    crate::elog!("summary_worker=already_published generation={generation}");
+                 }
+                 Ok(SummaryRunOutcome::Idle) => {
+                     retry_after.remove(&task_id);
++                    failures.remove(&task_id);
+                 }
+                 Ok(SummaryRunOutcome::ManualTtsReconciliationRequired { generation }) => {
+-                    retry_after.insert(task_id, Instant::now() + MANUAL_BACKOFF);
+-                    eprintln!("summary_worker=manual_reconciliation generation={generation}");
++                    retry_after.insert(task_id.clone(), Instant::now() + MANUAL_BACKOFF);
++                    failures.remove(&task_id);
++                    crate::elog!("summary_worker=manual_reconciliation generation={generation}");
+                 }
+                 Err(error) => {
+-                    retry_after.insert(task_id, Instant::now() + FAILURE_BACKOFF);
+-                    eprintln!("summary_worker=failed error={error}");
++                    let fails = failures.entry(task_id.clone()).or_insert(0);
++                    *fails += 1;
++                    let backoff = if *fails >= FAILURE_GIVE_UP_COUNT {
++                        GIVE_UP_BACKOFF
++                    } else {
++                        FAILURE_BACKOFF
++                    };
++                    retry_after.insert(task_id.clone(), Instant::now() + backoff);
++                    if *fails == FAILURE_GIVE_UP_COUNT {
++                        crate::elog!(
++                            "summary_worker=giving_up task={} after {} consecutive failures",
++                            &task_id[..task_id.len().min(14)],
++                            *fails
++                        );
++                    } else {
++                        crate::elog!("summary_worker=failed error={error}");
++                    }
+                 }
+             }
+         }
