@@ -1,9 +1,15 @@
-# setup-wsl.ps1 —— Windows 侧环境检查与准备
+﻿# setup-wsl.ps1 —— Windows 侧环境检查与准备
 #
 # 用法（在 Windows PowerShell 里）：
 #   powershell -ExecutionPolicy Bypass -File scripts\windows\setup-wsl.ps1
+#   powershell -ExecutionPolicy Bypass -File scripts\windows\setup-wsl.ps1 -WriteWslConfig
 #
-# 它只做「检查 + 提示 + 写 .wslconfig」，不安装任何东西、不改系统设置。
+# 它只做「检查 + 提示」，默认不改任何东西。
+# 加 -WriteWslConfig 才会创建 %USERPROFILE%\.wslconfig（防 WSL 被空闲回收）。
+
+param(
+  [switch]$WriteWslConfig
+)
 
 $ErrorActionPreference = "Continue"
 $out = @()
@@ -13,7 +19,9 @@ function Line($t) { $script:out += $t }
 Line "════════ 1. 基本环境 ════════"
 
 # WSL
-$wsl = (wsl.exe -l -v 2>&1 | Out-String).Trim()
+# 注意：wsl.exe 输出是 UTF-16，PowerShell 捕获后可能夹带 NUL 字节，
+# 直接输出会让内容看起来"断行/乱码"，这里统一剥掉。
+$wsl = (wsl.exe -l -v 2>&1 | Out-String) -replace "`0", ""
 Line "WSL 发行版:"
 $wsl -split "`n" | ForEach-Object { if ($_.Trim()) { Line "   $($_.Trim())" } }
 
@@ -50,25 +58,31 @@ Line "════════ 4. .wslconfig（防止发行版被空闲回收）
 $cfgPath = "$env:USERPROFILE\.wslconfig"
 if (Test-Path $cfgPath) {
   Line "   已存在 $cfgPath :"
-  (Get-Content $cfgPath) | ForEach-Object { Line "     $_" }
+  # 必须显式指定 UTF8：PS 5.1 默认按 ANSI 读，会让中文注释变乱码
+  (Get-Content $cfgPath -Encoding UTF8) | ForEach-Object { Line "     $_" }
 } else {
   Line "   不存在。建议创建（否则 WSL 空闲会被回收，Host 一起断）："
   Line "   [wsl2]"
   Line "   instanceIdleTimeout=-1"
   Line ""
-  $mk = Read-Host "   现在创建吗？(y/N)"
-  if ($mk -eq 'y') {
+  if ($WriteWslConfig) {
     "[wsl2]`ninstanceIdleTimeout=-1" | Out-File -FilePath $cfgPath -Encoding ascii
     Line "   ✅ 已写入 $cfgPath（重启 WSL 生效：wsl --shutdown）"
+  } else {
+    Line "   （本次未写入。要写就重跑并加 -WriteWslConfig）"
   }
 }
 
 Line ""
 Line "════════ 5. 结论 ════════"
 Line "   以上检查通过后，进入 WSL 执行："
-Line "     bash scripts/wsl/apply-patches.sh     # 打补丁 + 编译 Host"
+Line "     bash scripts/wsl/apply-patches.sh     # 编译 Host（补丁已内置，会自动跳过）"
 Line "     bash scripts/wsl/install-service.sh   # 装 systemd 服务"
 Line "     bash scripts/wsl/bind-slots.sh        # 绑定四个槽位"
 Line "     bash scripts/wsl/doctor.sh            # 诊断"
 
-$out | Tee-Object -FilePath (Join-Path $PSScriptRoot "..\..\setup-wsl-report.txt")
+# 报告写到临时目录，不污染仓库工作区
+$reportPath = Join-Path $env:TEMP "setup-wsl-report.txt"
+$out | Tee-Object -FilePath $reportPath
+Write-Output ""
+Write-Output "报告已保存到: $reportPath"

@@ -1,19 +1,25 @@
-' keepalive.vbs —— Windows 侧保活：定时唤醒 WSL，防止发行版被空闲回收
+' keepalive.vbs -- Windows-side keepalive: poke WSL periodically so the
+' distro is not reclaimed while idle.
 '
-' 背景：WSL2 发行版在空闲后会被回收，vmmem 进程退出 → WSL 里的 systemd 服务
-'       随发行版一起消失，Host 就断了。.wslconfig 的 instanceIdleTimeout 实测
-'       并不总能生效，所以用这个脚本每 5 分钟"戳"一下 WSL 保活。
+' Why: WSL2 reclaims an idle distro, vmmem exits, the systemd services inside
+'      WSL disappear with it, and the Host goes offline. The .wslconfig option
+'      instanceIdleTimeout=-1 does not reliably work, so this script pokes WSL
+'      every 5 minutes instead.
 '
-' 用法：
-'   1) 把本文件放进启动目录（Win+R 输入 shell:startup 回车）
-'   2) 或直接双击运行
-' 停止：任务管理器里结束 wscript.exe
+' Usage:
+'   1) Put this file in your Startup folder (Win+R -> shell:startup)
+'   2) Or just double-click it
+' Stop: end wscript.exe in Task Manager
+'
+' NOTE: kept ASCII-only on purpose. Windows Script Host reads .vbs as ANSI
+'       unless the file is UTF-16LE, so non-ASCII comments here can break it.
+'       Chinese documentation lives in docs/Windows-repro-guide.
 
 Set sh = CreateObject("WScript.Shell")
 Do While True
-    ' 静默执行（0 = 隐藏窗口，False = 不等待）
+    ' Silent run (0 = hidden window, False = do not wait)
     On Error Resume Next
     sh.Run "wsl.exe -d Ubuntu -- exec true", 0, False
     On Error GoTo 0
-    WScript.Sleep 300000   ' 5 分钟
+    WScript.Sleep 300000   ' 5 minutes
 Loop
