@@ -1443,7 +1443,7 @@ fn run_tts_session<S: Read + Write>(
         }),
     )
     .map_err(|_| {
-        eprintln!("tts_session=failed phase=commit_write");
+        crate::elog!("tts_session=failed phase=commit_write");
         ambiguous_after_commit()
     })?;
 
@@ -1518,7 +1518,7 @@ fn trace_tts_failure(
     state: &TtsSessionState,
     failure: AttemptFailure,
 ) -> AttemptFailure {
-    eprintln!(
+    crate::elog!(
         "tts_session=failed phase={phase} committed={} response_created={} audio_received={} audio_done={} content_done={} item_done={} response_done={} deltas={} pcm_bytes={}",
         state.committed,
         state.response_id.is_some(),
@@ -1564,7 +1564,7 @@ fn read_tts_event<S: Read + Write>(
                 } else {
                     0
                 };
-                eprintln!("tts_session=peer_close code={close_code}");
+                crate::elog!("tts_session=peer_close code={close_code}");
                 return Err(protocol_failure(request_submitted));
             }
             0x9 => write_masked_pong(stream, &frame.payload).map_err(|_| {

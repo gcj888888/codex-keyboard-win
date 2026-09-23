@@ -1415,6 +1415,7 @@ impl StateStore {
                UNION
                SELECT task_id FROM completion_ledger WHERE summarized_generation IS NULL
              ) WHERE (?1 IS NULL OR task_id > ?1)
+               AND task_id IN (SELECT task_id FROM bindings)
              ORDER BY task_id LIMIT 32",
         )?;
         let rows = statement.query_map([after_task_id], |row| row.get::<_, String>(0))?;

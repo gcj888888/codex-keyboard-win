@@ -67,7 +67,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         || outcome.isolation.persistent_runtime_rows != 0
         || outcome.isolation.workspace_max_nodes > SPARK_MAX_WORKSPACE_NODES
         || outcome.isolation.workspace_max_bytes > SPARK_MAX_WORKSPACE_BYTES
-        || !prompt_isolation.skills_confined
+        || prompt_isolation.skills_instruction_blocks != 0
+        || prompt_isolation.skill_path_mentions != 0
     {
         return Err("Spark isolation gate failed".into());
     }

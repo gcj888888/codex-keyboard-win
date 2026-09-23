@@ -44,7 +44,7 @@ use easy_codex_host::summary_orchestrator::{
 #[cfg(target_os = "linux")]
 fn load_environment_defaults() {
     let Ok(contents) = std::fs::read_to_string("/etc/environment") else {
-        eprintln!("env_defaults: /etc/environment unreadable");
+        easy_codex_host::elog!("env_defaults: /etc/environment unreadable");
         return;
     };
     let mut filled: Vec<String> = Vec::new();
@@ -74,7 +74,7 @@ fn load_environment_defaults() {
             filled.push(key.to_string());
         }
     }
-    eprintln!("env_defaults:filled={}", filled.join(","));
+    easy_codex_host::elog!("env_defaults:filled={}", filled.join(","));
 }
 
 #[cfg(not(target_os = "linux"))]

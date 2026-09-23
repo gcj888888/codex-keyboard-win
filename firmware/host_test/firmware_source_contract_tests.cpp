@@ -430,7 +430,7 @@ void audio_start_reuses_boot_resource_pool() {
                                "void KeyboardAudioLink::task_entry",
                                "void KeyboardAudioLink::control_task_entry");
 
-  assert(source.find("constexpr std::size_t kAudioCaptureQueueFrames = 64;") !=
+  assert(source.find("constexpr std::size_t kAudioCaptureQueueFrames = 256;") !=
          std::string::npos);
   assert(begin.find(
              "heap_caps_malloc(\n"

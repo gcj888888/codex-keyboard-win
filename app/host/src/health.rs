@@ -327,12 +327,12 @@ impl HostDaemon {
                     &prompt.request_id,
                     &prompt.transcript,
                 ) {
-                    eprintln!(
+                    crate::elog!(
                         "lan_voice_enqueue_rejected slot={} error={error}",
                         prompt.slot
                     );
                 } else {
-                    eprintln!("lan_voice_enqueued slot={}", prompt.slot);
+                    crate::elog!("lan_voice_enqueued slot={}", prompt.slot);
                 }
             }
             #[cfg(any(all(target_os = "macos", not(test)), all(target_os = "linux", not(test))))]
@@ -434,7 +434,7 @@ fn handle_lan_playback_event(
     match event {
         LanPlaybackEvent::Request(request) => {
             if let Err(error) = begin_lan_playback(request, store, ingress, cache, active) {
-                eprintln!("lan_playback=request_rejected error={error}");
+                crate::elog!("lan_playback=request_rejected error={error}");
             }
         }
         LanPlaybackEvent::Finished(finished) => {
@@ -451,7 +451,7 @@ fn handle_lan_playback_event(
                     Ok(true) => playback.heard_committed = true,
                     Ok(false) => return,
                     Err(error) => {
-                        eprintln!("lan_playback=finish_rejected error={error}");
+                        crate::elog!("lan_playback=finish_rejected error={error}");
                         return;
                     }
                 }
@@ -459,17 +459,17 @@ fn handle_lan_playback_event(
             match cache.reconcile_with(|| store.retained_summary_cache_references()) {
                 Ok(Ok(_)) => {}
                 Ok(Err(error)) => {
-                    eprintln!("lan_playback=cleanup_deferred error={error}");
+                    crate::elog!("lan_playback=cleanup_deferred error={error}");
                     return;
                 }
                 Err(error) => {
-                    eprintln!("lan_playback=cleanup_deferred error={error}");
+                    crate::elog!("lan_playback=cleanup_deferred error={error}");
                     return;
                 }
             }
             if ingress.acknowledge_playback_finished(finished.identity) {
                 active.remove(&finished.identity.lease);
-                eprintln!(
+                crate::elog!(
                     "lan_playback=heard slot={} generation={}",
                     finished.identity.slot, finished.identity.summary_generation
                 );
@@ -483,9 +483,9 @@ fn handle_lan_playback_event(
                 return;
             }
             if let Err(error) = store.cancel_summary_playback(&playback.lease) {
-                eprintln!("lan_playback=cancel_failed error={error}");
+                crate::elog!("lan_playback=cancel_failed error={error}");
             } else {
-                eprintln!(
+                crate::elog!(
                     "lan_playback=cancelled slot={} generation={}",
                     identity.slot, identity.summary_generation
                 );
@@ -546,7 +546,7 @@ fn begin_lan_playback(
                 break;
             }
             Ok(None) => {
-                eprintln!("lan_playback=no_unread slot={}", request.request.slot);
+                crate::elog!("lan_playback=no_unread slot={}", request.request.slot);
                 return Ok(());
             }
             Err(StoreError::Sqlite(rusqlite::Error::SqliteFailure(error, _)))
@@ -606,7 +606,7 @@ fn begin_lan_playback(
             heard_committed: false,
         },
     );
-    eprintln!(
+    crate::elog!(
         "lan_playback=started slot={} generation={} bytes={} samples={} peak={} rms_permille={}",
         identity.slot,
         identity.summary_generation,

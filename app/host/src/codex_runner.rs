@@ -20,6 +20,21 @@ const OUTPUT_TOO_LARGE: u8 = 2;
 pub const SUPERVISOR_CLI_MISSING_EXIT: i32 = 78;
 pub const SUPERVISOR_IO_EXIT: i32 = 79;
 
+/// 把本机当前时间作为环境信息附在用户指令前面。
+///
+/// 背景：Codex 的上下文里只有日期与时区，不会为了取时间而执行 `date`，
+/// 所以"现在几点"这类问题会被答成"我无法获取精确时间"。
+/// 这里把时间直接喂给它，问题即消失。
+fn augment_prompt(transcript: &str) -> String {
+    format!(
+        "<环境信息>当前本机时间：{} {}（时区 Asia/Shanghai）。\
+用户若询问当前时间，请直接使用这个时间回答，不要声称无法获取。\n\n{}",
+        crate::local_datetime_human(),
+        crate::local_weekday_cn(),
+        transcript
+    )
+}
+
 #[derive(Debug, Clone)]
 pub struct CodexRunnerConfig {
     pub executable: PathBuf,
@@ -209,7 +224,8 @@ impl CodexRunner {
                 .set_nonblocking(true)
                 .map_err(|_| JobFailureKind::ProcessIo)?;
         }
-        self.drive_child(child, parent_control, job.prompt.as_bytes(), cancel)
+        let prompt = augment_prompt(&job.prompt);
+        self.drive_child(child, parent_control, prompt.as_bytes(), cancel)
     }
 
     fn drive_child(
@@ -514,7 +530,7 @@ fn read_stderr(mut reader: impl Read, limit: usize) -> Vec<u8> {
 }
 
 fn classify_stderr(stderr: &[u8]) -> JobFailureKind {
-    eprintln!(
+    crate::elog!(
         "job_stderr_raw={}",
         String::from_utf8_lossy(stderr).replace('\n', " | ")
     );

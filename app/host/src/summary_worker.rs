@@ -21,8 +21,12 @@ use crate::summary_orchestrator::{
 };
 
 const POLL_INTERVAL: Duration = Duration::from_millis(250);
-const FAILURE_BACKOFF: Duration = Duration::from_secs(30);
+// 单次失败后的重试间隔：30s → 5s，让偶发失败（模型产出不合格）更快恢复。
+const FAILURE_BACKOFF: Duration = Duration::from_secs(5);
 const MANUAL_BACKOFF: Duration = Duration::from_secs(60 * 60);
+// 连续失败多少次就"熔断"进入长退避，防止毒药 completion 无限重试烧钱：
+const FAILURE_GIVE_UP_COUNT: u32 = 5;
+const GIVE_UP_BACKOFF: Duration = Duration::from_secs(10 * 60);
 
 pub fn run(
     paths: AppPaths,
@@ -31,14 +35,15 @@ pub fn run(
     shutdown: Arc<AtomicBool>,
 ) {
     let mut retry_after = HashMap::<String, Instant>::new();
+    let mut failures = HashMap::<String, u32>::new();
     while !shutdown.load(Ordering::Acquire) {
         match Runtime::open(&paths, Arc::clone(&cache)) {
             Ok(runtime) => {
-                run_ready(&mut store, &runtime, &shutdown, &mut retry_after);
+                run_ready(&mut store, &runtime, &shutdown, &mut retry_after, &mut failures);
                 return;
             }
             Err(error) => {
-                eprintln!("summary_runtime=unavailable error={error}");
+                crate::elog!("summary_runtime=unavailable error={error}");
                 sleep_until_shutdown(&shutdown, FAILURE_BACKOFF);
             }
         }
@@ -96,13 +101,14 @@ fn run_ready(
     runtime: &Runtime,
     shutdown: &AtomicBool,
     retry_after: &mut HashMap<String, Instant>,
+    failures: &mut HashMap<String, u32>,
 ) {
     let mut scan_after = None::<String>;
     while !shutdown.load(Ordering::Acquire) {
         let tasks = match store.summary_work_tasks_after(scan_after.as_deref()) {
             Ok(tasks) => tasks,
             Err(error) => {
-                eprintln!("summary_worker=store_error error={error}");
+                crate::elog!("summary_worker=store_error error={error}");
                 sleep_until_shutdown(shutdown, FAILURE_BACKOFF);
                 continue;
             }
@@ -140,25 +146,44 @@ fn run_ready(
             match result {
                 Ok(SummaryRunOutcome::Published { unread, .. }) => {
                     retry_after.remove(&task_id);
-                    eprintln!(
+                    failures.remove(&task_id);
+                    crate::elog!(
                         "summary_worker=published generation={} coverage={}",
                         unread.generation, unread.coverage_count
                     );
                 }
                 Ok(SummaryRunOutcome::AlreadyPublished { generation }) => {
                     retry_after.remove(&task_id);
-                    eprintln!("summary_worker=already_published generation={generation}");
+                    failures.remove(&task_id);
+                    crate::elog!("summary_worker=already_published generation={generation}");
                 }
                 Ok(SummaryRunOutcome::Idle) => {
                     retry_after.remove(&task_id);
+                    failures.remove(&task_id);
                 }
                 Ok(SummaryRunOutcome::ManualTtsReconciliationRequired { generation }) => {
-                    retry_after.insert(task_id, Instant::now() + MANUAL_BACKOFF);
-                    eprintln!("summary_worker=manual_reconciliation generation={generation}");
+                    retry_after.insert(task_id.clone(), Instant::now() + MANUAL_BACKOFF);
+                    failures.remove(&task_id);
+                    crate::elog!("summary_worker=manual_reconciliation generation={generation}");
                 }
                 Err(error) => {
-                    retry_after.insert(task_id, Instant::now() + FAILURE_BACKOFF);
-                    eprintln!("summary_worker=failed error={error}");
+                    let fails = failures.entry(task_id.clone()).or_insert(0);
+                    *fails += 1;
+                    let backoff = if *fails >= FAILURE_GIVE_UP_COUNT {
+                        GIVE_UP_BACKOFF
+                    } else {
+                        FAILURE_BACKOFF
+                    };
+                    retry_after.insert(task_id.clone(), Instant::now() + backoff);
+                    if *fails == FAILURE_GIVE_UP_COUNT {
+                        crate::elog!(
+                            "summary_worker=giving_up task={} after {} consecutive failures",
+                            &task_id[..task_id.len().min(14)],
+                            *fails
+                        );
+                    } else {
+                        crate::elog!("summary_worker=failed error={error}");
+                    }
                 }
             }
         }

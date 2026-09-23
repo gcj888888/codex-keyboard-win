@@ -258,7 +258,7 @@ impl SparkRunner {
         let prompt = build_prompt(claim, previous_unheard)?;
         let mut auth = AuthSnapshot::load(&self.config.auth_path)?;
         secure_directory(&self.config.temp_root).map_err(|err| {
-            eprintln!(
+            crate::elog!(
                 "spark_workspace: path={} error={}",
                 self.config.temp_root.display(),
                 err
@@ -273,11 +273,11 @@ impl SparkRunner {
         auth.bytes.zeroize();
         auth.bytes.clear();
         auth.verify_source(&self.config.auth_path)?;
-        eprintln!("spark_debug=step20_auth_verified");
+        crate::elog!("spark_debug=step20_auth_verified");
         let output_monitor = OutputFileMonitor::new(&run.output, &run.output_file)?;
-        eprintln!("spark_debug=step21_output_monitor");
+        crate::elog!("spark_debug=step21_output_monitor");
         let auth_monitor = AuthCopyMonitor::new(&run.codex_home.join("auth.json"), &run.auth_file)?;
-        eprintln!("spark_debug=step22_auth_monitor");
+        crate::elog!("spark_debug=step22_auth_monitor");
         let workspace_monitor = SparkWorkspaceMonitor::new(
             &run.codex_home,
             &run.auth_file,
@@ -288,7 +288,7 @@ impl SparkRunner {
             &run.tmpdir,
             &self.config.executable,
         )?;
-        eprintln!("spark_debug=step23_workspace_monitor");
+        crate::elog!("spark_debug=step23_workspace_monitor");
 
         let supervise = cfg!(target_os = "macos") && self.config.supervisor_executable.is_some();
         let (mut parent_control, child_control) = if supervise {
@@ -376,7 +376,7 @@ impl SparkRunner {
             return Err(SparkError::Cancelled);
         }
         let deadline = Instant::now() + self.config.timeout;
-        eprintln!("spark_debug=step24_spawn_child");
+        crate::elog!("spark_debug=step24_spawn_child");
         let mut child = command.spawn().map_err(|error| {
             if error.kind() == std::io::ErrorKind::NotFound {
                 SparkError::CliMissing
@@ -430,7 +430,7 @@ impl SparkRunner {
             }
         }
         child = startup_guard.into_child();
-        eprintln!("spark_debug=step25_drive_child");
+        crate::elog!("spark_debug=step25_drive_child");
         self.drive_child(
             child,
             parent_control,
@@ -444,9 +444,9 @@ impl SparkRunner {
         workspace_monitor.check()?;
         validate_runtime_databases(&run.codex_home)?;
         auth.verify_source(&self.config.auth_path)?;
-        eprintln!("spark_expected_raw expected={:?}", expected_covers);
+        crate::elog!("spark_expected_raw expected={:?}", expected_covers);
         let bytes = read_bounded_output(&run.output, output_monitor.identity)?;
-        eprintln!(
+        crate::elog!(
             "spark_output_raw len={} content={}",
             bytes.len(),
             String::from_utf8_lossy(bytes.as_slice())
@@ -600,7 +600,7 @@ impl SparkRunner {
                 .as_ref()
                 .is_some_and(std::process::ExitStatus::success);
         if !succeeded {
-            eprintln!(
+            crate::elog!(
                 "spark_child_fail status={:?} supervisor_code={:?} stderr_len={} stderr={}",
                 status,
                 supervisor_code,
@@ -821,27 +821,27 @@ impl Drop for PrivateTempDir {
 
 impl SparkRunFiles {
     fn create(temp_root: &Path, auth: &[u8], task_id: &str) -> Result<Self, SparkError> {
-        eprintln!("spark_debug=step1_process_state_lock");
+        crate::elog!("spark_debug=step1_process_state_lock");
         let mut process_state = spark_process_state()
             .lock()
             .map_err(|_| SparkError::UnsafeWorkspace)?;
-        eprintln!("spark_debug=step2_open_sweep_lock");
+        crate::elog!("spark_debug=step2_open_sweep_lock");
         let sweep_lock = open_private_file(&temp_root.join(".sweep.lock"))
             .map_err(|_| SparkError::UnsafeWorkspace)?;
-        eprintln!("spark_debug=step3_lock_exclusive");
+        crate::elog!("spark_debug=step3_lock_exclusive");
         sweep_lock
             .lock_exclusive()
             .map_err(|_| SparkError::UnsafeWorkspace)?;
         let sweep_lock = ExplicitFileLock::from_locked(sweep_lock);
         let task_lock_path = temp_root.join(task_lock_name(task_id));
-        eprintln!("spark_debug=step4_live_tasks_check");
+        crate::elog!("spark_debug=step4_live_tasks_check");
         if process_state.live_tasks.contains(&task_lock_path) {
             return Err(SparkError::Busy);
         }
         let task_guardian_path = temp_root.join(task_guardian_socket_name(task_id));
-        eprintln!("spark_debug=step5_guardian_check");
+        crate::elog!("spark_debug=step5_guardian_check");
         remove_stale_guardian_or_report_busy(&task_guardian_path)?;
-        eprintln!("spark_debug=step6_open_task_lock");
+        crate::elog!("spark_debug=step6_open_task_lock");
         let task_lock =
             open_private_file(&task_lock_path).map_err(|_| SparkError::UnsafeWorkspace)?;
         match task_lock.try_lock_exclusive() {
@@ -852,25 +852,25 @@ impl SparkRunFiles {
             Err(_) => return Err(SparkError::UnsafeWorkspace),
         }
         let task_lock = ExplicitFileLock::from_locked(task_lock);
-        eprintln!("spark_debug=step7_sweep_stale_runs");
+        crate::elog!("spark_debug=step7_sweep_stale_runs");
         sweep_stale_runs(temp_root, &process_state.live_runs)?;
-        eprintln!("spark_debug=step8_tempdir");
+        crate::elog!("spark_debug=step8_tempdir");
         let root = Builder::new()
             .prefix("spark-")
             .tempdir_in(temp_root)
             .map_err(|_| SparkError::UnsafeWorkspace)?;
-        eprintln!("spark_debug=step9_chmod_root");
+        crate::elog!("spark_debug=step9_chmod_root");
         fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700))
             .map_err(|_| SparkError::UnsafeWorkspace)?;
-        eprintln!("spark_debug=step10_owner_lock");
+        crate::elog!("spark_debug=step10_owner_lock");
         let owner_lock = open_private_file(&root.path().join("owner.lock")).map_err(|e| {
-            eprintln!("spark_debug=step10_failed root={:?} err={:?}", root.path(), e);
+            crate::elog!("spark_debug=step10_failed root={:?} err={:?}", root.path(), e);
             SparkError::UnsafeWorkspace
         })?;
         owner_lock
             .lock_exclusive()
             .map_err(|_| SparkError::UnsafeWorkspace)?;
-        eprintln!("spark_debug=step11_owner_lock_exclusive");
+        crate::elog!("spark_debug=step11_owner_lock_exclusive");
         let owner_lock = ExplicitFileLock::from_locked(owner_lock);
         let owner_guardian = root.path().join("guardian.sock");
         let codex_home = root.path().join("home");
@@ -881,12 +881,12 @@ impl SparkRunFiles {
             fs::set_permissions(directory, fs::Permissions::from_mode(0o700))
                 .map_err(|_| SparkError::UnsafeWorkspace)?;
         }
-        eprintln!("spark_debug=step12_home_work_tmp_dirs");
+        crate::elog!("spark_debug=step12_home_work_tmp_dirs");
         let auth_file = write_new_file(&codex_home.join("auth.json"), auth, 0o400)?;
-        eprintln!("spark_debug=step13_auth_json");
+        crate::elog!("spark_debug=step13_auth_json");
         let sandbox_marker_file =
             write_new_file(&codex_home.join(".sandbox_migration"), b"v1\n", 0o400)?;
-        eprintln!("spark_debug=step14_sandbox_marker");
+        crate::elog!("spark_debug=step14_sandbox_marker");
         let skills_dir = codex_home.join("skills");
         let home_tmpdir = codex_home.join("tmp");
         for directory in [&skills_dir, &home_tmpdir] {
@@ -900,16 +900,16 @@ impl SparkRunFiles {
             fs::set_permissions(directory, fs::Permissions::from_mode(0o500))
                 .map_err(|_| SparkError::UnsafeWorkspace)?;
         }
-        eprintln!("spark_debug=step15_skills_tmp_dirs");
+        crate::elog!("spark_debug=step15_skills_tmp_dirs");
         let schema = root.path().join("summary.schema.json");
         let output = root.path().join("summary.output.json");
         drop(write_new_file(&schema, output_schema().as_bytes(), 0o400)?);
-        eprintln!("spark_debug=step16_schema");
+        crate::elog!("spark_debug=step16_schema");
         let output_file = write_new_file(&output, b"", 0o600)?;
-        eprintln!("spark_debug=step17_output");
+        crate::elog!("spark_debug=step17_output");
         fs::set_permissions(&workdir, fs::Permissions::from_mode(0o500))
             .map_err(|_| SparkError::UnsafeWorkspace)?;
-        eprintln!("spark_debug=step18_workdir_500");
+        crate::elog!("spark_debug=step18_workdir_500");
         drop(sweep_lock);
         let registry_run = root.path().to_path_buf();
         process_state.live_runs.insert(registry_run);
@@ -1467,16 +1467,16 @@ impl SparkWorkspaceMonitor {
 
     fn debug_dump(&self) {
         for base in [&self.root, &self.process_tmp] {
-            eprintln!("spark_debug=dump base={:?}", base);
+            crate::elog!("spark_debug=dump base={:?}", base);
             match fs::symlink_metadata(base) {
-                Ok(md) => eprintln!(
+                Ok(md) => crate::elog!(
                     "spark_debug=dump_self mode={:o} uid={} isdir={} path={:?}",
                     md.mode() & 0o7777,
                     md.uid(),
                     md.is_dir(),
                     base
                 ),
-                Err(error) => eprintln!("spark_debug=dump_self ERR {error} path={:?}", base),
+                Err(error) => crate::elog!("spark_debug=dump_self ERR {error} path={:?}", base),
             }
             if let Ok(entries) = fs::read_dir(base) {
                 for entry in entries.flatten() {
@@ -1499,7 +1499,7 @@ impl SparkWorkspaceMonitor {
             } else {
                 String::new()
             };
-            eprintln!(
+            crate::elog!(
                 "spark_debug=dump {:indent$}mode={:o} uid={} size={} path={:?} {}",
                 "",
                 md.mode() & 0o7777,
@@ -1522,13 +1522,13 @@ impl SparkWorkspaceMonitor {
     fn audit(&self) -> Result<(usize, u64), SparkError> {
         let metadata = fs::symlink_metadata(&self.root).map_err(|_| SparkError::UnsafeWorkspace)?;
         if !private_directory_matches(&metadata, 0o700, self.root_identity) {
-            eprintln!(
+            crate::elog!(
                 "spark_fail=root_not_0700 mode={:o} uid={} path={:?}",
                 metadata.mode() & 0o7777,
                 metadata.uid(),
                 self.root
             );
-            eprintln!("ws_fail:region=audit line=9");
+            crate::elog!("ws_fail:region=audit line=9");
             return Err(SparkError::UnsafeWorkspace);
         }
 
@@ -1545,11 +1545,11 @@ impl SparkWorkspaceMonitor {
             let is_auth = name == "auth.json" && self.auth_identity.is_some();
             nodes = nodes.checked_add(1).ok_or(SparkError::UnsafeWorkspace)?;
             if nodes > SPARK_MAX_WORKSPACE_NODES {
-                eprintln!("ws_fail:region=audit line=25");
+                crate::elog!("ws_fail:region=audit line=25");
                 return Err(SparkError::UnsafeWorkspace);
             }
             if metadata.uid() != unsafe { libc::geteuid() } {
-                eprintln!("ws_fail:region=audit line=28 kind=auth_or_ws");
+                crate::elog!("ws_fail:region=audit line=28 kind=auth_or_ws");
                 return Err(if is_auth {
                     SparkError::Authentication
                 } else {
@@ -1557,7 +1557,7 @@ impl SparkWorkspaceMonitor {
                 });
             }
             if is_auth && !metadata.file_type().is_file() {
-                eprintln!("ws_fail:region=audit line=35 kind=authentication");
+                crate::elog!("ws_fail:region=audit line=35 kind=authentication");
                 return Err(SparkError::Authentication);
             }
 
@@ -1566,12 +1566,12 @@ impl SparkWorkspaceMonitor {
                     // 新版 Codex 会自动把内置技能写进 skills（skills/.system/skill-creator/...），
                     // 因此这里只校验目录本身的归属与权限，不再要求它为空。
                     if !private_directory_matches(&metadata, 0o500, self.skills_identity) {
-                        eprintln!("ws_fail:region=audit line=46");
+                        crate::elog!("ws_fail:region=audit line=46");
                         return Err(SparkError::UnsafeWorkspace);
                     }
                 } else if name == "tmp" {
                     if !private_directory_matches(&metadata, 0o500, self.tmp_identity) {
-                        eprintln!("ws_fail:region=audit line=50");
+                        crate::elog!("ws_fail:region=audit line=50");
                         return Err(SparkError::UnsafeWorkspace);
                     }
                     let mut children =
@@ -1586,7 +1586,7 @@ impl SparkWorkspaceMonitor {
                             private_directory_matches(&metadata, 0o700, self.arg0_identity)
                         })
                     {
-                        eprintln!("ws_fail:region=audit line=64");
+                        crate::elog!("ws_fail:region=audit line=64");
                         return Err(SparkError::UnsafeWorkspace);
                     }
                     let (arg0_nodes, arg0_bytes) =
@@ -1599,18 +1599,18 @@ impl SparkWorkspaceMonitor {
                         .filter(|bytes| *bytes <= SPARK_MAX_WORKSPACE_BYTES)
                         .ok_or(SparkError::UnsafeWorkspace)?;
                     if nodes > SPARK_MAX_WORKSPACE_NODES {
-                        eprintln!("ws_fail:region=audit line=76");
+                        crate::elog!("ws_fail:region=audit line=76");
                         return Err(SparkError::UnsafeWorkspace);
                     }
                 } else {
-                    eprintln!("ws_fail:region=audit line=79");
+                    crate::elog!("ws_fail:region=audit line=79");
                     return Err(SparkError::UnsafeWorkspace);
                 }
                 continue;
             }
 
             if !metadata.file_type().is_file() || metadata.nlink() != 1 {
-                eprintln!("ws_fail:region=audit line=85 kind=auth_or_ws");
+                crate::elog!("ws_fail:region=audit line=85 kind=auth_or_ws");
                 return Err(if is_auth {
                     SparkError::Authentication
                 } else {
@@ -1624,7 +1624,7 @@ impl SparkWorkspaceMonitor {
                     .is_some_and(|identity| identity.matches(&metadata))
                     || mode != 0o400
                 {
-                    eprintln!("ws_fail:region=audit line=98 kind=auth_or_ws");
+                    crate::elog!("ws_fail:region=audit line=98 kind=auth_or_ws");
                     return Err(if is_auth {
                         SparkError::Authentication
                     } else {
@@ -1632,7 +1632,7 @@ impl SparkWorkspaceMonitor {
                     });
                 }
                 if metadata.len() == 0 || metadata.len() > MAX_AUTH_BYTES {
-                    eprintln!("ws_fail:region=audit line=105 kind=auth_or_ws");
+                    crate::elog!("ws_fail:region=audit line=105 kind=auth_or_ws");
                     return Err(if is_auth {
                         SparkError::Authentication
                     } else {
@@ -1645,19 +1645,19 @@ impl SparkWorkspaceMonitor {
                     || mode != 0o400
                     || metadata.len() != 3
                 {
-                    eprintln!("ws_fail:region=audit line=117");
+                    crate::elog!("ws_fail:region=audit line=117");
                     return Err(SparkError::UnsafeWorkspace);
                 }
                 3
             } else {
                 if mode & 0o133 != 0 {
-                    eprintln!("ws_fail:region=audit line=122");
+                    crate::elog!("ws_fail:region=audit line=122");
                     return Err(SparkError::UnsafeWorkspace);
                 }
                 runtime_file_limit(&name).ok_or(SparkError::UnsafeWorkspace)?
             };
             if metadata.len() > limit {
-                eprintln!("ws_fail:region=audit line=127");
+                crate::elog!("ws_fail:region=audit line=127");
                 return Err(SparkError::UnsafeWorkspace);
             }
             bytes = bytes
@@ -1673,12 +1673,12 @@ impl SparkWorkspaceMonitor {
                 .next()
                 .is_some()
         {
-            eprintln!("ws_fail:region=audit line=142");
+            crate::elog!("ws_fail:region=audit line=142");
             return Err(SparkError::UnsafeWorkspace);
         }
         nodes = nodes.checked_add(1).ok_or(SparkError::UnsafeWorkspace)?;
         if nodes > SPARK_MAX_WORKSPACE_NODES {
-            eprintln!("ws_fail:region=audit line=146");
+            crate::elog!("ws_fail:region=audit line=146");
             return Err(SparkError::UnsafeWorkspace);
         }
         Ok((nodes, bytes))
@@ -1702,7 +1702,7 @@ fn audit_arg0_scratch(arg0: &Path, alias_target: &Path) -> Result<(usize, u64), 
     };
     let entry = entry.map_err(|_| SparkError::UnsafeWorkspace)?;
     if entries.next().is_some() {
-        eprintln!("ws_fail:region=arg0 line=7");
+        crate::elog!("ws_fail:region=arg0 line=7");
         return Err(SparkError::UnsafeWorkspace);
     }
     let name = entry
@@ -1713,7 +1713,7 @@ fn audit_arg0_scratch(arg0: &Path, alias_target: &Path) -> Result<(usize, u64), 
         .strip_prefix("codex-arg0")
         .ok_or(SparkError::UnsafeWorkspace)?;
     if suffix.len() != 6 || !suffix.bytes().all(|byte| byte.is_ascii_alphanumeric()) {
-        eprintln!("ws_fail:region=arg0 line=17");
+        crate::elog!("ws_fail:region=arg0 line=17");
         return Err(SparkError::UnsafeWorkspace);
     }
     let metadata = fs::symlink_metadata(entry.path()).map_err(|_| SparkError::UnsafeWorkspace)?;
@@ -1721,7 +1721,7 @@ fn audit_arg0_scratch(arg0: &Path, alias_target: &Path) -> Result<(usize, u64), 
         || metadata.uid() != unsafe { libc::geteuid() }
         || metadata.mode() & 0o777 != 0o755
     {
-        eprintln!("ws_fail:region=arg0 line=24");
+        crate::elog!("ws_fail:region=arg0 line=24");
         return Err(SparkError::UnsafeWorkspace);
     }
 
@@ -1735,13 +1735,13 @@ fn audit_arg0_scratch(arg0: &Path, alias_target: &Path) -> Result<(usize, u64), 
             .into_string()
             .map_err(|_| SparkError::UnsafeWorkspace)?;
         if !seen.insert(child_name.clone()) {
-            eprintln!("ws_fail:region=arg0 line=37");
+            crate::elog!("ws_fail:region=arg0 line=37");
             return Err(SparkError::UnsafeWorkspace);
         }
         let metadata =
             fs::symlink_metadata(child.path()).map_err(|_| SparkError::UnsafeWorkspace)?;
         if metadata.uid() != unsafe { libc::geteuid() } || metadata.nlink() != 1 {
-            eprintln!("ws_fail:region=arg0 line=42");
+            crate::elog!("ws_fail:region=arg0 line=42");
             return Err(SparkError::UnsafeWorkspace);
         }
         if child_name == ".lock" {
@@ -1749,7 +1749,7 @@ fn audit_arg0_scratch(arg0: &Path, alias_target: &Path) -> Result<(usize, u64), 
                 || metadata.mode() & 0o777 != 0o644
                 || metadata.len() != 0
             {
-                eprintln!("ws_fail:region=arg0 line=49");
+                crate::elog!("ws_fail:region=arg0 line=49");
                 return Err(SparkError::UnsafeWorkspace);
             }
         } else if matches!(
@@ -1757,7 +1757,7 @@ fn audit_arg0_scratch(arg0: &Path, alias_target: &Path) -> Result<(usize, u64), 
             "apply_patch" | "applypatch" | "codex-execve-wrapper" | "codex-linux-sandbox"
         ) {
             if !metadata.file_type().is_symlink() || metadata.len() > 4096 {
-                eprintln!("ws_fail:region=arg0 line=56");
+                crate::elog!("ws_fail:region=arg0 line=56");
                 return Err(SparkError::UnsafeWorkspace);
             }
             let target = fs::read_link(child.path()).map_err(|_| SparkError::UnsafeWorkspace)?;
@@ -1765,14 +1765,14 @@ fn audit_arg0_scratch(arg0: &Path, alias_target: &Path) -> Result<(usize, u64), 
             // 所以除精确相等外,额外接受一个确实含受信 codex 可执行文件的目录。
             let trusted = is_trusted_codex_bin_dir(&target);
             if target != alias_target && !trusted {
-                eprintln!(
+                crate::elog!(
                     "ws_dbg name={} target={:?} alias={:?} trusted={}",
                     child_name, target, alias_target, trusted
                 );
                 return Err(SparkError::UnsafeWorkspace);
             }
         } else {
-            eprintln!("ws_fail:region=arg0 line=65");
+            crate::elog!("ws_fail:region=arg0 line=65");
             return Err(SparkError::UnsafeWorkspace);
         }
         nodes = nodes.checked_add(1).ok_or(SparkError::UnsafeWorkspace)?;
@@ -2152,7 +2152,7 @@ pub fn verify_spark_prompt_isolation(
     }
     if !status.success() {
         let classified = classify_stderr(&stderr);
-        eprintln!(
+        crate::elog!(
             "spark_child_fail code={:?} signal={:?} classified={:?} stderr_len={} stderr={}",
             status.code(),
             status.signal(),

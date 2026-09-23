@@ -186,12 +186,15 @@ where
         match self.recover_authenticated_cache(&claim, observer) {
             Ok(Some(outcome)) => return Ok(outcome),
             Ok(None) => {}
-            Err(error) => return Err(error),
+            Err(error) => {
+                let _ = self.abandon(&claim);
+                return Err(error);
+            }
         }
 
         if let Some(attempt) = self.store.summary_tts_attempt(&claim)? {
             self.abandon(&claim)?;
-            eprintln!(
+            crate::elog!(
                 "summary=abandoned_unpublished_tts_attempt state={attempt:?} generation={} resumed={}",
                 claim.generation, resumed_after_process_restart
             );
@@ -232,7 +235,7 @@ where
 
         if self.store.begin_summary_tts_attempt(&claim)? != SummaryTtsAttemptState::Started {
             self.abandon(&claim)?;
-            eprintln!(
+            crate::elog!(
                 "summary=abandoned_unpublished_tts_attempt state=attempt_changed generation={}",
                 claim.generation
             );
@@ -240,7 +243,7 @@ where
         }
         observer.reached(SummaryCheckpoint::TtsAttemptStarted);
 
-        eprintln!(
+        crate::elog!(
             "summary=tts_start generation={} characters={}",
             claim.generation,
             summary.spoken_text.chars().count()
@@ -253,7 +256,7 @@ where
             Ok(tts) => tts,
             Err(TtsError::AmbiguousAfterCommit) => {
                 self.abandon(&claim)?;
-                eprintln!(
+                crate::elog!(
                     "summary=abandoned_unpublished_tts_attempt state=tts_ambiguous generation={}",
                     claim.generation
                 );
@@ -266,7 +269,7 @@ where
         };
         if tts.receipt().voice != SUMMARY_TTS_VOICE {
             self.abandon(&claim)?;
-            eprintln!(
+            crate::elog!(
                 "summary=abandoned_unpublished_tts_attempt state=voice_mismatch generation={}",
                 claim.generation
             );
@@ -289,12 +292,18 @@ where
         );
         let (unread, audio) = match committed {
             Ok(Ok(published)) => published,
-            Ok(Err(error)) => return Err(error.into()),
+            Ok(Err(error)) => {
+                // publish 失败（如 generation changed）必须立刻释放 claim，
+                // 否则留下僵尸 generating 行，后续重试全撞上
+                // "another summary generation is already running"。
+                let _ = self.abandon(&claim);
+                return Err(error.into());
+            }
             Err(_) => match self.recover_authenticated_cache(&claim, observer) {
                 Ok(Some(outcome)) => return Ok(outcome),
                 Ok(None) => {
                     self.abandon(&claim)?;
-                    eprintln!(
+                    crate::elog!(
                         "summary=abandoned_unpublished_tts_attempt state=cache_commit generation={}",
                         claim.generation
                     );

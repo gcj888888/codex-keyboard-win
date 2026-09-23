@@ -278,7 +278,7 @@ impl LanVoiceIngress {
                                 }
                             }
                             Err(error) => {
-                                eprintln!("lan_voice_rejected={}", error_code(&error));
+                                crate::elog!("lan_voice_rejected={}", error_code(&error));
                             }
                         },
                         Err(mpsc::RecvTimeoutError::Timeout) => {}
@@ -332,7 +332,7 @@ impl LanVoiceIngress {
                             } else if let Err(error) =
                                 assembler.ingest(packet, source, Instant::now())
                             {
-                                eprintln!("lan_voice_rejected={}", error_code(&error));
+                                crate::elog!("lan_voice_rejected={}", error_code(&error));
                             }
                         }
                         Err(error)
@@ -348,17 +348,17 @@ impl LanVoiceIngress {
                             Ok(capture) => match capture_sender.try_send(capture) {
                                 Ok(()) => {}
                                 Err(TrySendError::Full(_)) => {
-                                    eprintln!("lan_voice_rejected=capture_queue_full");
+                                    crate::elog!("lan_voice_rejected=capture_queue_full");
                                 }
                                 Err(TrySendError::Disconnected(_)) => return,
                             },
                             Err(error) => {
-                                eprintln!("lan_voice_rejected={}", error_code(&error));
+                                crate::elog!("lan_voice_rejected={}", error_code(&error));
                             }
                         }
                     }
                     for error in assembler.expire_incomplete(Instant::now()) {
-                        eprintln!("lan_voice_rejected={}", error_code(&error));
+                        crate::elog!("lan_voice_rejected={}", error_code(&error));
                     }
                     playback.tick(&socket, assembler.auth_key.as_ref(), &playback_event_sender);
                 }
@@ -547,7 +547,7 @@ impl ActiveLanPlayback {
                     finish_deadline: Instant::now() + PLAYBACK_FINISH_TIMEOUT,
                     started_at: Instant::now(),
                 });
-                eprintln!(
+                crate::elog!(
                     "lan_playback=begin_sent slot={} generation={}",
                     start.begin.identity.slot, start.begin.identity.summary_generation
                 );
@@ -640,12 +640,12 @@ impl ActiveLanPlayback {
             let request = match decode_request(packet, key) {
                 Ok(request) => request,
                 Err(_) => {
-                    eprintln!("lan_playback=request_invalid reason=authentication_or_format");
+                    crate::elog!("lan_playback=request_invalid reason=authentication_or_format");
                     return;
                 }
             };
             if !self.accept_request_generation(request) {
-                eprintln!("lan_playback=request_replayed slot={}", request.slot);
+                crate::elog!("lan_playback=request_replayed slot={}", request.slot);
                 return;
             }
             if let Some(transfer) = self.transfer.take() {
@@ -692,7 +692,7 @@ impl ActiveLanPlayback {
             if transfer.phase == PlaybackSendPhase::DeviceFinished {
                 transfer.phase = PlaybackSendPhase::HostCommit;
                 transfer.finish_deadline = Instant::now() + PLAYBACK_FINISH_TIMEOUT;
-                eprintln!(
+                crate::elog!(
                     "lan_playback=device_finished slot={} generation={}",
                     finished.identity.slot, finished.identity.summary_generation
                 );
@@ -750,7 +750,7 @@ impl ActiveLanPlayback {
             if requested_offset == transfer.acknowledged_offset {
                 if transfer.retry_count >= PLAYBACK_MAX_RETRIES {
                     let identity = transfer.begin.identity;
-                    eprintln!(
+                    crate::elog!(
                         "lan_playback=gap_retry_exhausted slot={} generation={} offset={}",
                         identity.slot, identity.summary_generation, requested_offset
                     );
@@ -772,7 +772,7 @@ impl ActiveLanPlayback {
         }
         if ack.status != 0 {
             let identity = transfer.begin.identity;
-            eprintln!(
+            crate::elog!(
                 "lan_playback=device_rejected slot={} generation={} status={} diagnostic={}",
                 identity.slot,
                 identity.summary_generation,
@@ -798,7 +798,7 @@ impl ActiveLanPlayback {
         }
         match transfer.phase {
             PlaybackSendPhase::BeginAck if ack.next_offset == 0 => {
-                eprintln!(
+                crate::elog!(
                     "lan_playback=begin_ack slot={} generation={}",
                     ack.identity.slot, ack.identity.summary_generation
                 );
@@ -820,7 +820,7 @@ impl ActiveLanPlayback {
                     return;
                 }
                 if transfer.acknowledged_offset == transfer.eiad.len() {
-                    eprintln!(
+                    crate::elog!(
                         "lan_playback=transfer_complete slot={} generation={} bytes={} elapsed_ms={}",
                         ack.identity.slot,
                         ack.identity.summary_generation,
@@ -899,7 +899,7 @@ impl ActiveLanPlayback {
         ) {
             if now >= transfer.finish_deadline {
                 let identity = transfer.begin.identity;
-                eprintln!(
+                crate::elog!(
                     "lan_playback=device_finish_timeout slot={} generation={}",
                     identity.slot, identity.summary_generation
                 );
@@ -913,7 +913,7 @@ impl ActiveLanPlayback {
         }
         if transfer.retry_count >= PLAYBACK_MAX_RETRIES {
             let identity = transfer.begin.identity;
-            eprintln!(
+            crate::elog!(
                 "lan_playback=transport_timeout slot={} generation={} phase={:?}",
                 identity.slot, identity.summary_generation, transfer.phase
             );
@@ -1052,7 +1052,7 @@ impl CaptureAssembler {
             return Err(LanVoiceError::CaptureLimit);
         }
         if missing_frames > 0 {
-            eprintln!(
+            crate::elog!(
                 "lan_voice_gap_filled slot={} frames={missing_frames}",
                 capture.identity.slot
             );
@@ -1108,7 +1108,7 @@ impl CaptureAssembler {
             return Err(LanVoiceError::InvalidSequence);
         }
         if missing_frames > 0 {
-            eprintln!(
+            crate::elog!(
                 "lan_voice_gap_filled slot={} frames={missing_frames}",
                 capture.identity.slot
             );
@@ -1205,7 +1205,7 @@ impl HybridTranscriber {
             wav.fill(0);
             match qwen_result {
                 Ok(transcript) => {
-                    eprintln!(
+                    crate::elog!(
                         "lan_voice_asr={} transport={} slot={}",
                         transcript.model, transcript.transport, capture.identity.slot
                     );
@@ -1213,14 +1213,14 @@ impl HybridTranscriber {
                 }
                 Err(error) => {
                     if !qwen_error_allows_offline_fallback(error) {
-                        eprintln!("lan_voice_asr_error={}", asr_error_code(error));
+                        crate::elog!("lan_voice_asr_error={}", asr_error_code(error));
                         return Err(map_qwen_error(error));
                     }
-                    eprintln!("lan_voice_asr_fallback={}", asr_error_code(error));
+                    crate::elog!("lan_voice_asr_fallback={}", asr_error_code(error));
                 }
             }
         } else {
-            eprintln!("lan_voice_asr_fallback=credential_missing");
+            crate::elog!("lan_voice_asr_fallback=credential_missing");
         }
         self.whisper.transcribe(&capture)
     }
