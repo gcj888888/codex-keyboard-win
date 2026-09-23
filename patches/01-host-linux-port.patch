@@ -429,36 +429,6 @@
  pub mod cache;
 --- a/app/host/src/main.rs
 +++ b/app/host/src/main.rs
-@@ -3,10 +3,10 @@
- use std::sync::atomic::AtomicBool;
- 
- use easy_codex_host::bindings::BindingService;
--#[cfg(any(target_os = "macos", target_os = "linux"))]
-+#[cfg(any(target_os = "macos", target_os = "linux"))]
- use easy_codex_host::cache::{CacheLimits, CacheStore};
- use easy_codex_host::codex_catalog::CodexTaskCatalog;
--#[cfg(any(target_os = "macos", target_os = "linux"))]
-+#[cfg(any(target_os = "macos", target_os = "linux"))]
- use easy_codex_host::dashscope::DashScopeTtsClient;
- use easy_codex_host::dashscope::{ASR_MODEL, DashScopeAsrClient, DashScopeHandshake};
- use easy_codex_host::health::{HEALTH_SOCKET_NAME, HostDaemon, query_health};
-@@ -24,12 +24,12 @@
-     DashScopeEnvStore, ImportLock, KeychainAccounts, LocalCacheSecretStore, SecretStore,
-     configure_dashscope_env, dashscope_key_is_installed,
- };
--#[cfg(any(target_os = "macos", target_os = "linux"))]
-+#[cfg(any(target_os = "macos", target_os = "linux"))]
- use easy_codex_host::spark_runner::{SparkRunner, SparkRunnerConfig};
- use easy_codex_host::store::StateStore;
--#[cfg(any(target_os = "macos", target_os = "linux"))]
--use easy_codex_host::summary_orchestrator::{
--    DashScopeSummarySynthesizer, SummaryOrchestrator, SummaryRunOutcome,
-+#[cfg(any(target_os = "macos", target_os = "linux"))]
-+use easy_codex_host::summary_orchestrator::{
-+    DashScopeSummarySynthesizer, SummaryOrchestrator, SummaryRunOutcome,
- };
- 
- /// Fill in environment values this process is missing, using `/etc/environment`.
 @@ -44,7 +44,7 @@
  #[cfg(target_os = "linux")]
  fn load_environment_defaults() {
@@ -477,24 +447,6 @@
  }
  
  #[cfg(not(target_os = "linux"))]
-@@ -361,7 +361,7 @@
-     Ok(())
- }
- 
--#[cfg(any(target_os = "macos", target_os = "linux"))]
-+#[cfg(any(target_os = "macos", target_os = "linux"))]
- fn summarize_slot(slot: u8) -> Result<(), Box<dyn std::error::Error>> {
-     let paths = home_paths()?;
-     paths.prepare()?;
-@@ -423,7 +423,7 @@
-     Ok(())
- }
- 
--#[cfg(not(any(target_os = "macos", target_os = "linux")))]
-+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
- fn summarize_slot(_slot: u8) -> Result<(), Box<dyn std::error::Error>> {
-     Err("summarize-slot requires the macOS Host runtime".into())
- }
 --- a/app/host/src/spark_runner.rs
 +++ b/app/host/src/spark_runner.rs
 @@ -168,7 +168,6 @@

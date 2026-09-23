@@ -71,7 +71,7 @@ ASR/TTS 交给 Qwen，任务执行交给本地 Codex CLI。
 | `tools/` | 诊断工具（**无板子模拟器**、僵尸总结清理）|
 | `app/host/` | Rust Host（已含补丁）|
 | `firmware/` | ESP32-S3 固件（已含补丁）|
-| `docs/Windows复现指南.md` | **从零到跑通的完整步骤** |
+| `docs/00–05 系列` | **Windows 复现五篇**：[指南](docs/Windows复现指南.md) / [板子](docs/01-板子固件篇.md) / [Host](docs/02-Host配置篇.md) / [云端](docs/03-云端配置篇.md) / [总结与踩坑](docs/04-总结与踩坑.md) / [操作手册](docs/05-操作手册.md) |
 | `docs/总体方案.md` 等 | 作者原文（产品边界、架构、协议）|
 | `flow/` | 进展日志、踩坑记录、决策、计划 |
 

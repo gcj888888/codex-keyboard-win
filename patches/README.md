@@ -53,11 +53,12 @@ git apply patches/02-firmware-fixes.patch
 
 ---
 
-## 02-firmware-fixes.patch（1 文件 / +27 -11）
+## 02-firmware-fixes.patch（2 文件 / +28 -12）
 
 | 文件 | 改了什么 | 为什么 |
 |---|---|---|
 | `main/platform/keyboard_audio.cpp` | ① `kAudioCaptureQueueFrames` 64→256 帧（1.28s→5.12s 缓冲）② 新增 `kAudioMaxToleratedGapFrames=10`，缺口 ≤10 帧不再作废整句 | **Wi-Fi 抖动吃句子**：录音队列溢出 → 丢帧 → 序号缺口 → 固件立刻 `request_stop` 作废整句话。原版是"缺口即丢弃"，改后与 Host 侧 `MAX_CAPTURE_GAP_FRAMES=10` 对齐，小额缺口交给 Host 补静音 |
+| `host_test/firmware_source_contract_tests.cpp` | 契约期望值 `kAudioCaptureQueueFrames = 64` → `256` | **配套改动**：这是"源码契约测试"，硬编码校验固件关键常量。改了固件必须同步契约，否则测试失败（我们的自检就是这么发现它的）|
 
 ---
 

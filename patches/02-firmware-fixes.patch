@@ -52,3 +52,14 @@
      }
  
      const ai_keyboard::AudioPacketMetadata metadata{
+--- a/firmware/host_test/firmware_source_contract_tests.cpp
++++ b/firmware/host_test/firmware_source_contract_tests.cpp
+@@ -430,7 +430,7 @@
+                                "void KeyboardAudioLink::task_entry",
+                                "void KeyboardAudioLink::control_task_entry");
+ 
+-  assert(source.find("constexpr std::size_t kAudioCaptureQueueFrames = 64;") !=
++  assert(source.find("constexpr std::size_t kAudioCaptureQueueFrames = 256;") !=
+          std::string::npos);
+   assert(begin.find(
+              "heap_caps_malloc(\n"

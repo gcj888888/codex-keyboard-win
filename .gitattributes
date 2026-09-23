@@ -1,0 +1,38 @@
+# 统一行尾符为 LF
+# 原因：宿主测试 firmware_source_contract_tests 用「精确字符串匹配」校验固件源码
+#       （模式里含 LF 换行），源码是 CRLF 时会匹配失败。原项目源码即为 LF。
+* text=auto eol=lf
+
+*.rs    text eol=lf
+*.cpp   text eol=lf
+*.h     text eol=lf
+*.hpp   text eol=lf
+*.c     text eol=lf
+*.py    text eol=lf
+*.sh    text eol=lf
+*.md    text eol=lf
+*.json  text eol=lf
+*.toml  text eol=lf
+*.yaml  text eol=lf
+*.yml   text eol=lf
+*.csv   text eol=lf
+*.html  text eol=lf
+
+# Windows 专属脚本保持 CRLF（PowerShell / VBS 在 Windows 上需要）
+*.ps1   text eol=crlf
+*.bat   text eol=crlf
+*.cmd   text eol=crlf
+*.vbs   text eol=crlf
+
+# 二进制文件不做转换
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.gif   binary
+*.pdf   binary
+*.bin   binary
+*.elf   binary
+*.a     binary
+*.so    binary
+*.dll   binary
+*.exe   binary
