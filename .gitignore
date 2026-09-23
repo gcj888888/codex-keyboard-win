@@ -52,3 +52,6 @@ tools/**/.swiftpm/
 projects/*/svg_final/
 projects/*/validation/rendered-*/
 svg_quality_report.txt
+
+# git filter-branch 的临时目录（内部状态，绝不应提交）
+.git-rewrite/
