@@ -46,6 +46,75 @@ Windows 原生程序进不了 WSL 的内部通道，**移植代价极大**。
 
 > **不需要**：macOS、Tauri App、LaunchAgent、Keychain。
 
+## 1.5 安装前置依赖（新电脑必做）
+
+> 只装**你自己缺的**。装完后回到 `## 2. 快速检查环境` 验证。
+
+### ① WSL2 + Ubuntu
+
+```powershell
+# Windows PowerShell（管理员）
+wsl --install -d Ubuntu
+# 装完重启，进 Ubuntu 设好用户名密码
+wsl -l -v          # 确认 VERSION = 2
+```
+
+### ② Rust（编译 Host 用）
+
+```bash
+# 在 WSL Ubuntu 里
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+source "$HOME/.cargo/env"
+cargo --version
+```
+
+### ③ Node.js + Codex CLI（Host 靠它执行任务）
+
+```bash
+# 在 WSL Ubuntu 里
+curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
+sudo apt-get install -y nodejs
+sudo npm install -g @openai/codex
+codex --version
+```
+
+Codex 的模型配置（走千问云端）写在 `~/.codex/config.toml`：
+
+```toml
+model = "qwen3-max"
+model_provider = "qwen"
+
+[model_providers.qwen]
+name = "Qwen"
+base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+env_key = "QWEN_API_KEY"
+```
+
+### ④ ESP-IDF v5.5.x（**只有要自己编译固件时才需要**）
+
+```bash
+# 在 WSL Ubuntu 里
+cd "$HOME"
+git clone -b v5.5.5 --depth 1 --recursive https://github.com/espressif/esp-idf.git esp/esp-idf
+cd esp/esp-idf
+./install.sh esp32s3        # ★ 只装 ESP32-S3 目标，体积小且不会去装用不到的 RISC-V 工具链
+```
+
+> **为什么指定 `esp32s3`**：不指定时 `install.sh` 会装全套目标（含 RISC-V 芯片的
+> 调试器）。我们的实测环境就是缺了 RISC-V 的 gdb，导致官方 `export.sh` 全量检查失败。
+> 只装 `esp32s3` 可以绕开这个坑；`scripts/wsl/flash-firmware.sh` 也**不依赖 `export.sh`**，
+> 它自己按 `IDF_DIR` 拼工具链 PATH。
+
+装完位置默认是 `$HOME/esp/esp-idf`，正好是 `flash-firmware.sh` 的默认值。
+
+### ⑤ usbipd-win（**只有要烧录固件时才需要**）
+
+```powershell
+winget install --interactive --exact dorssel.usbipd-win
+```
+
+> 装完要**重启**（或用管理员执行一次 `usbipd --version` 激活服务）。
+
 ## 2. 快速检查环境
 
 ```powershell
@@ -69,15 +138,19 @@ instanceIdleTimeout=-1
 
 ## 3. 落地步骤
 
-### 步骤 1 · 克隆 + 打补丁 + 编译 Host
+### 步骤 1 · 克隆 + 编译 Host
+
+> **仓库里的 `app/` 与 `firmware/` 已经是「打完补丁」的完整版，clone 下来直接能编译。**
+> `patches/` 只是留作跟上游对比用的差异记录，**正常情况下不需要**再打一遍
+> （`apply-patches.sh` 会检测并自动跳过已应用的补丁，重复跑也安全）。
 
 ```bash
 # 在 WSL 里
-cd ~/codex-keyboard-win         # 或你的仓库路径
+cd <你的仓库路径>                     # 例如 ~/codex-keyboard-win
 bash scripts/wsl/apply-patches.sh
 ```
 
-这一步做三件事：应用 `patches/*.patch` → `cargo build --release` → 输出 `target/release/easy-codex-host`。
+这一步做三件事：检测/跳过补丁 → `cargo build --release` → 输出 `target/release/easy-codex-host`。
 
 > 首次编译约 3~8 分钟（依赖多）。若报 Rust 版本不够，先 `rustup update`。
 
@@ -147,7 +220,8 @@ usbipd attach --wsl --busid <BUSID>
 
 # 2) 板子进下载模式：开机状态「短按一次 BOOT 松开」（不是按住）
 # 3) WSL 里编译+烧录：
-IDF_DIR=/root/esp-idf-local bash scripts/wsl/flash-firmware.sh
+IDF_DIR=$HOME/esp/esp-idf bash scripts/wsl/flash-firmware.sh
+#   （装到别的路径就改 IDF_DIR；不传则默认 $HOME/esp/esp-idf）
 ```
 
 **烧录铁律**（本仓库脚本已遵守）：

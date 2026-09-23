@@ -2,20 +2,21 @@
 # 编译并烧录固件到 ESP32-S3（EasyInput V2）
 #
 # 前置条件：
-#   1) WSL 里已装 ESP-IDF（本项目实测环境：IDF_PATH=/root/esp-idf-local）
+#   1) WSL 里已装 ESP-IDF（v5.x）。装在哪都行 —— 用 IDF_DIR 指过去即可，
+#      常见位置：$HOME/esp/esp-idf、/opt/esp-idf
 #   2) 板子 USB 已通过 usbipd 共享给 WSL，出现 /dev/ttyACM*
 #   3) 板子已进入下载模式（开机状态短按一次 BOOT 松开）
 #
 # 用法：
-#   IDF_PATH=/root/esp-idf-local bash scripts/wsl/flash-firmware.sh
-#   IDF_DIR=/root/esp-idf-local ESP_PORT=/dev/ttyACM0 bash scripts/wsl/flash-firmware.sh
+#   bash scripts/wsl/flash-firmware.sh
+#   IDF_DIR=$HOME/esp/esp-idf ESP_PORT=/dev/ttyACM0 bash scripts/wsl/flash-firmware.sh
 #
 # ⚠️ 只写 0x0 / 0x8000 / 0x10000 三个区，绝不 erase 全片
 #    （nvs 里有 Wi-Fi 密码与配网信息，擦掉要重新配网）
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-IDF_DIR="${IDF_DIR:-${IDF_PATH:-/root/esp-idf-local}}"
+IDF_DIR="${IDF_DIR:-${IDF_PATH:-$HOME/esp/esp-idf}}"
 PORT="${ESP_PORT:-/dev/ttyACM0}"
 FW="$ROOT/firmware"
 

@@ -19,6 +19,19 @@ app/**/.wrangler/
 app/**/.vite/
 app/**/.dev.vars
 
+# 构建产物（通用，含嵌套目录如 firmware/host_test/build-host）
+**/build/
+**/build-*/
+**/build_*/
+.ninja_deps
+.ninja_log
+CMakeCache.txt
+CMakeFiles/
+*.o
+*.a
+*.elf
+*.map
+
 # Firmware
 /build-*/
 firmware/build*/
